@@ -21,6 +21,7 @@ def setup(tree: app_commands.CommandTree, *, guild: discord.abc.Snowflake | None
         if is_commander:
             lines.append("**Commander commands:**")
             lines.append("- `/highscore submit` — submit a new score")
+            lines.append("- `/highscore refresh_web` — regenerate static leaderboard webpage")
             lines.append("- /highscore import_scores — import historical scores from CSV")
             lines.append("- `/tank add|edit|remove|list|export_csv` — roster updates and export")
             lines.append("- `/backup …` — backups and status")

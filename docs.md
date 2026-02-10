@@ -23,6 +23,9 @@ Legend:
 - `/highscore submit <player> <tank> <score>`
   - Description: Submit a new highscore (must beat current tank record).
   - Example: `/highscore submit player:"PlayerOne" tank:"Tiger II" score:3120`
+- `/highscore refresh_web`
+  - Description: Regenerate static leaderboard webpage manually.
+  - Example: `/highscore refresh_web`
 - `/tank add <name> <tier> <type>`
   - Description: Add a tank to roster.
   - Example: `/tank add name:"Tiger II" tier:8 type:heavy`
@@ -124,6 +127,23 @@ DASHBOARD_TOKEN=   # optional
 ```
 Endpoints: `/` overview, `/tanks`, `/recent`.
 If DASHBOARD_TOKEN is set, use `Authorization: Bearer <token>` or `?token=`.
+
+## Static Leaderboard Webpage
+The bot can generate a modern static webpage grouped as:
+- main level: Tier
+- sub level: Tank type
+
+It is auto-updated whenever scores/tanks are changed and can be manually refreshed with:
+- `/highscore refresh_web` (commander only)
+
+Configure via env vars:
+```env
+WEB_LEADERBOARD_ENABLED=1
+WEB_OUTPUT_PATH=web/leaderboard.html
+WEB_CLAN_NAME=Your Clan Name
+WEB_CLAN_MOTTO=Victory through discipline
+WEB_BANNER_URL=https://example.com/clan-banner.jpg
+```
 
 
 ## Encrypted Backups (Optional)
