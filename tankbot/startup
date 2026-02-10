@@ -7,6 +7,12 @@ MIN_PY_MINOR=11
 
 echo "=== ${PROJECT_NAME} environment setup ==="
 
+# Make local GitHub CLI available if downloaded in this repo.
+if [[ -x ".tools/gh_2.86.0_macOS_arm64/bin/gh" ]]; then
+  export PATH="$(pwd)/.tools/gh_2.86.0_macOS_arm64/bin:${PATH}"
+  echo "✅ gh available: $(gh --version | head -n 1)"
+fi
+
 # Pick a python executable (prefer python3.11 if present)
 if command -v python3.11 >/dev/null 2>&1; then
   PY=python3.11
