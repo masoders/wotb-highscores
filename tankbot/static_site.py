@@ -10,6 +10,10 @@ from . import config, db, utils
 TYPE_ORDER = {"heavy": 0, "medium": 1, "light": 2, "td": 3}
 
 
+def _sorted_snapshot_rows(rows: list[dict]) -> list[dict]:
+    return sorted(rows, key=lambda r: str(r.get("tank_name") or "").casefold())
+
+
 def _build_styles() -> str:
     return """
 :root {
@@ -197,7 +201,7 @@ tbody tr:hover { background: #253a5a66; }
 
 def _format_score(score: int | None) -> str:
     if score is None:
-        return "No score"
+        return "-"
     return f"{int(score):,}"
 
 
@@ -327,7 +331,8 @@ async def generate_leaderboard_page() -> str | None:
         if key in seen_buckets:
             continue
         seen_buckets.add(key)
-        grouped[int(tier)][str(ttype)] = await db.best_per_tank_for_bucket(int(tier), str(ttype))
+        rows = await db.best_per_tank_for_bucket(int(tier), str(ttype))
+        grouped[int(tier)][str(ttype)] = _sorted_snapshot_rows(rows)
 
     html = _render_html(
         clan_name=config.WEB_CLAN_NAME,
