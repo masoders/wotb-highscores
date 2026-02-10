@@ -1,0 +1,31 @@
+# Caddyfile example for Tank Highscore Dashboard (HTTPS via Let's Encrypt)
+#
+# Prereqs:
+# - Your DNS A/AAAA record points to this server
+# - Ports 80 and 443 open
+#
+# Assumes the dashboard listens on 127.0.0.1:8080
+# and requires an Authorization bearer token.
+
+dashboard.yourdomain.tld {
+
+    # Optional: additional basic auth gate (recommended)
+    # basicauth {
+    #     admin JDJhJDE0JHNhbXBsZXNhbXBsZXNhbXBsZXNhbXBsZXNhbXBsZXNhbXBsZXNhbXBsZXNhbXBsZQ==
+    # }
+
+    reverse_proxy 127.0.0.1:8080
+
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+        Permissions-Policy interest-cohort=()
+    }
+
+    # Logging (optional)
+    log {
+        output file /var/log/caddy/tank_dashboard.log
+    }
+}

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_NAME="tank-highscore-bot"
+MIN_PY_MAJOR=3
+MIN_PY_MINOR=11
+
+echo "=== ${PROJECT_NAME} environment setup ==="
+
+# Pick a python executable (prefer python3.11 if present)
+if command -v python3.11 >/dev/null 2>&1; then
+  PY=python3.11
+elif command -v python3 >/dev/null 2>&1; then
+  PY=python3
+else
+  echo "❌ python3 not found. Install Python ${MIN_PY_MAJOR}.${MIN_PY_MINOR}+ first."
+  exit 1
+fi
+
+# Check version
+VER="$($PY -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+MAJOR="${VER%%.*}"
+MINOR="${VER##*.}"
+
+if [[ "$MAJOR" -lt "$MIN_PY_MAJOR" ]] || { [[ "$MAJOR" -eq "$MIN_PY_MAJOR" ]] && [[ "$MINOR" -lt "$MIN_PY_MINOR" ]]; }; then
+  echo "❌ Python ${MIN_PY_MAJOR}.${MIN_PY_MINOR}+ required, found ${VER}"
+  exit 1
+fi
+
+echo "✅ Using $PY (Python ${VER})"
+
+# Create venv if missing
+if [[ ! -d "venv" ]]; then
+  echo "Creating venv..."
+  "$PY" -m venv venv
+fi
+
+# Activate venv
+# shellcheck disable=SC1091
+source venv/bin/activate
+echo "✅ venv activated: $(python -c 'import sys; print(sys.executable)')"
+
+# Safety: warn if .env missing
+if [[ ! -f ".env" ]]; then
+  echo "⚠️  .env is missing. Copy .env.example -> .env and fill it before running the bot."
+fi
+
+# Install deps
+if [[ ! -f "requirements.txt" ]]; then
+  echo "❌ requirements.txt missing."
+  exit 1
+fi
+
+echo "Upgrading pip..."
+python -m pip install --upgrade pip >/dev/null
+
+echo "Installing dependencies..."
+pip install -r requirements.txt
+
+# Quick import sanity
+python - <<'PY'
+import sys
+print("✅ Python:", sys.version.split()[0])
+try:
+    import discord
+    print("✅ discord.py:", discord.__version__)
+except Exception as e:
+    raise SystemExit(f"❌ discord import failed: {e}")
+PY
+
+echo
+echo "✅ Environment ready."
+echo "Next:"
+echo "  source venv/bin/activate"
+echo "  python bot.py"
