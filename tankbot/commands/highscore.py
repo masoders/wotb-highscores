@@ -1,9 +1,21 @@
 import discord, csv, io
 from discord import app_commands
 from datetime import datetime, timezone
-from .. import config, db, utils, forum_index
+import logging
+from .. import config, db, utils, forum_index, static_site
 
 grp = app_commands.Group(name="highscore", description="Highscore commands")
+logger = logging.getLogger(__name__)
+
+async def _refresh_webpage_notice(*, context: str) -> str:
+    try:
+        page_path = await static_site.generate_leaderboard_page()
+    except Exception as exc:
+        logger.exception("Failed to update static leaderboard page")
+        return f"⚠️ {context} webpage update failed: `{type(exc).__name__}`"
+    if not page_path:
+        return "ℹ️ Static webpage generation is disabled."
+    return f"🌐 Static webpage updated: `{page_path}`"
 
 def _parse_iso8601(s: str) -> str | None:
     s = (s or "").strip()
@@ -183,6 +195,8 @@ async def import_scores(
         msg_lines.append("⚠️ Skipped leaderboard thread updates (`update_index=false`).")
         msg_lines.append("Run `/tank rebuild_index` after import to refresh snapshots.")
 
+    msg_lines.append(await _refresh_webpage_notice(context="Import applied, but"))
+
     msg_lines.append("")
     msg_lines.append(f"✅ Import applied. Inserted **{len(inserts)}** rows.")
     await interaction.followup.send("\n".join(msg_lines), ephemeral=True)
@@ -224,7 +238,9 @@ async def submit(interaction: discord.Interaction, player: str, tank: str, score
 
     # Update only the relevant bucket thread
     await forum_index.targeted_update(interaction.client, int(tier), str(ttype))
-    await interaction.followup.send(f"✅ Submission stored. {gate_msg[2:]}", ephemeral=True)
+    msg = f"✅ Submission stored. {gate_msg[2:]}"
+    msg += "\n" + await _refresh_webpage_notice(context="Submission saved, but")
+    await interaction.followup.send(msg, ephemeral=True)
 
 @grp.command(name="show", description="Show current champion (filters optional)")
 @app_commands.describe(tier="Filter by tier (1..10)", type="Filter by type (light/medium/heavy/td)")
@@ -334,6 +350,16 @@ async def history(interaction: discord.Interaction, limit: int = 10):
     if len(msg) > 1800:
         msg = msg[:1800] + "\n…(truncated)"
     await interaction.followup.send(msg, ephemeral=True)
+
+@grp.command(name="refresh_web", description="Regenerate static leaderboard webpage (commanders only)")
+async def refresh_web(interaction: discord.Interaction):
+    member = interaction.user
+    if not isinstance(member, discord.Member) or not utils.has_commander_role(member):
+        await interaction.response.send_message("Nope. Only **Clan Commanders** can refresh the webpage.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    notice = await _refresh_webpage_notice(context="Manual refresh requested, but")
+    await interaction.followup.send(notice, ephemeral=True)
 
 def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord.Object | None = None):
     tree.add_command(grp, guild=guild)
