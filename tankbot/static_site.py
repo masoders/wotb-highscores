@@ -83,6 +83,53 @@ h1 {
   font-size: 1.45rem;
   color: #f1f6ff;
 }
+.view-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.view-label {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid #3a527b;
+  border-radius: 999px;
+  background: #12213d;
+  padding: 2px;
+}
+.view-toggle button {
+  border: 0;
+  background: transparent;
+  color: #c6d8ff;
+  padding: 7px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.88rem;
+}
+.view-toggle button.active {
+  background: linear-gradient(180deg, #367dcb, #2b5baf);
+  color: #f3f8ff;
+}
+.bulk-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+.bulk-actions button {
+  border: 1px solid #446291;
+  background: #162746;
+  color: #d0defe;
+  border-radius: 9px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.bulk-actions button:hover { background: #1e3357; }
 .tier-card {
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -142,6 +189,7 @@ h1 {
 .table-wrap {
   padding: 8px 10px 10px;
 }
+.view-panel[data-main-view="player"] { display: none; }
 table {
   width: 100%;
   border-collapse: collapse;
@@ -163,6 +211,8 @@ th {
   font-weight: 700;
 }
 .col-tank { width: 44%; }
+.col-type { width: 14%; }
+.col-tier { width: 10%; }
 .col-score { width: 16%; }
 .col-player { width: 20%; }
 .col-updated { width: 20%; }
@@ -224,11 +274,129 @@ def _render_rows(rows: list[dict]) -> str:
     return "".join(out)
 
 
+def _group_rows_by_player(rows: list[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        player_key = str(row.get("player_name") or "—")
+        grouped[player_key].append(row)
+    return grouped
+
+
+def _render_player_rows(rows: list[dict]) -> str:
+    out: list[str] = []
+    sorted_rows = sorted(
+        rows,
+        key=lambda r: (
+            -(int(r.get("score")) if isinstance(r.get("score"), int) else -1),
+            str(r.get("tank_name") or "").casefold(),
+        ),
+    )
+    for row in sorted_rows:
+        tank = escape(str(row.get("tank_name") or "Unknown"))
+        ttype = escape(utils.title_case_type(str(row.get("type") or "")))
+        tier = escape(str(row.get("tier") or "—"))
+        score = row.get("score")
+        when = escape(utils.fmt_utc(row.get("created_at")))
+        score_text = escape(_format_score(score if isinstance(score, int) else None))
+        out.append(
+            "<tr>"
+            f"<td>{tank}</td>"
+            f"<td>{ttype}</td>"
+            f"<td>{tier}</td>"
+            f"<td class=\"score\">{score_text}</td>"
+            f"<td class=\"hide-sm muted\">{when}</td>"
+            "</tr>"
+        )
+    return "".join(out)
+
+
+def _render_player_blocks(rows: list[dict]) -> str:
+    grouped = _group_rows_by_player(rows)
+    out: list[str] = []
+    for player in sorted(grouped.keys(), key=lambda p: p.casefold()):
+        safe_player = escape(player)
+        player_rows = grouped[player]
+        tank_count = len(player_rows)
+        out.extend(
+            [
+                "<details class=\"type-block\" open>",
+                "<summary class=\"type-head\">",
+                f"<div class=\"type-title\"><span class=\"badge\">{safe_player}</span></div>",
+                f"<span class=\"type-count\">{tank_count} tanks</span>",
+                "</summary>",
+                "<div class=\"table-wrap\">",
+                "<table>",
+                "<colgroup>"
+                "<col class=\"col-tank\" />"
+                "<col class=\"col-type\" />"
+                "<col class=\"col-tier\" />"
+                "<col class=\"col-score\" />"
+                "<col class=\"col-updated\" />"
+                "</colgroup>",
+                "<thead><tr><th>Tank</th><th>Type</th><th>Tier</th><th class=\"score-head\">Best Score</th><th class=\"hide-sm\">Updated</th></tr></thead>",
+                f"<tbody>{_render_player_rows(player_rows)}</tbody>",
+                "</table>",
+                "</div>",
+                "</details>",
+            ]
+        )
+    return "".join(out)
+
+
+def _build_script() -> str:
+    return """
+(() => {
+  const wrappers = Array.from(document.querySelectorAll(".table-wrap"));
+  const buttons = Array.from(document.querySelectorAll("[data-view-btn]"));
+  const actionButtons = Array.from(document.querySelectorAll("[data-bulk-action]"));
+  const panels = Array.from(document.querySelectorAll("[data-main-view]"));
+  let current = "tank";
+
+  const update = (view) => {
+    current = view;
+    wrappers.forEach((el) => el.setAttribute("data-view", view));
+    panels.forEach((panel) => {
+      const panelView = panel.getAttribute("data-main-view");
+      panel.style.display = panelView === view ? "block" : "none";
+    });
+    buttons.forEach((btn) => {
+      const active = btn.getAttribute("data-view-btn") === view;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  };
+
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => update(btn.getAttribute("data-view-btn") || "tank"));
+  });
+
+  const setAllDetails = (openState) => {
+    const activePanel = document.querySelector(`[data-main-view="${current}"]`);
+    if (!activePanel) return;
+    activePanel.querySelectorAll("details").forEach((el) => {
+      el.open = openState;
+    });
+  };
+
+  actionButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const action = btn.getAttribute("data-bulk-action");
+      if (action === "expand") setAllDetails(true);
+      if (action === "collapse") setAllDetails(false);
+    });
+  });
+
+  update(current);
+})();
+"""
+
+
 def _render_html(
     clan_name: str,
     clan_motto: str | None,
     banner_url: str | None,
     grouped: dict[int, dict[str, list[dict]]],
+    player_rows: list[dict],
     tank_total: int,
 ) -> str:
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -262,6 +430,18 @@ def _render_html(
         "</div>",
         "</section>",
         "<h2 class=\"section-title\">Leaderboard</h2>",
+        "<div class=\"view-controls\">",
+        "<span class=\"view-label\">View</span>",
+        "<div class=\"view-toggle\" role=\"group\" aria-label=\"Leaderboard view\">",
+        "<button type=\"button\" data-view-btn=\"tank\" class=\"active\" aria-pressed=\"true\">By Tank</button>",
+        "<button type=\"button\" data-view-btn=\"player\" aria-pressed=\"false\">By Player</button>",
+        "</div>",
+        "<div class=\"bulk-actions\" role=\"group\" aria-label=\"Expand and collapse\">",
+        "<button type=\"button\" data-bulk-action=\"collapse\">Collapse All</button>",
+        "<button type=\"button\" data-bulk-action=\"expand\">Expand All</button>",
+        "</div>",
+        "</div>",
+        "<section class=\"view-panel\" data-main-view=\"tank\">",
     ]
 
     for tier in sorted(grouped.keys(), reverse=True):
@@ -305,6 +485,18 @@ def _render_html(
             )
         content.append("</div>")
         content.append("</details>")
+    content.append("</section>")
+    content.extend(
+        [
+            "<section class=\"view-panel\" data-main-view=\"player\">",
+            "<div class=\"tier-card\">",
+            "<div class=\"tier-body\">",
+            _render_player_blocks(player_rows),
+            "</div>",
+            "</div>",
+            "</section>",
+        ]
+    )
 
     content.extend(
         [
@@ -312,6 +504,7 @@ def _render_html(
             f"Generated at {escape(now)} UTC • Tanks listed: {tank_total}",
             "</p>",
             "</main>",
+            f"<script>{_build_script()}</script>",
             "</body>",
             "</html>",
         ]
@@ -325,6 +518,7 @@ async def generate_leaderboard_page() -> str | None:
 
     tanks = await db.list_tanks()
     grouped: dict[int, dict[str, list[dict]]] = defaultdict(dict)
+    player_rows: list[dict] = []
     seen_buckets: set[tuple[int, str]] = set()
     for _name, tier, ttype in tanks:
         key = (int(tier), str(ttype))
@@ -332,13 +526,23 @@ async def generate_leaderboard_page() -> str | None:
             continue
         seen_buckets.add(key)
         rows = await db.best_per_tank_for_bucket(int(tier), str(ttype))
-        grouped[int(tier)][str(ttype)] = _sorted_snapshot_rows(rows)
+        sorted_rows = _sorted_snapshot_rows(rows)
+        grouped[int(tier)][str(ttype)] = sorted_rows
+        for row in sorted_rows:
+            player_rows.append(
+                {
+                    **row,
+                    "tier": int(tier),
+                    "type": str(ttype),
+                }
+            )
 
     html = _render_html(
         clan_name=config.WEB_CLAN_NAME,
         clan_motto=(config.WEB_CLAN_MOTTO or "").strip() or None,
         banner_url=config.WEB_BANNER_URL or None,
         grouped=grouped,
+        player_rows=player_rows,
         tank_total=len(tanks),
     )
     output_path = Path(config.WEB_OUTPUT_PATH)
