@@ -187,14 +187,16 @@ def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord
             await interaction.followup.send("CSV has no header row.", ephemeral=True)
             return
 
+        to_add: list[tuple[str, int, str]] = []
         added = 0
         skipped = 0
         errors: list[str] = []
+        created_at = utils.utc_now_z()
 
         for i, row in enumerate(reader, start=2):
             name = (row.get("name") or "").strip()
             tier_raw = (row.get("tier") or "").strip()
-            ttype = (row.get("type") or "").strip()
+            ttype = (row.get("type") or "").strip().lower()
 
             if not name or not tier_raw or not ttype:
                 errors.append(f"Line {i}: missing name/tier/type")
@@ -206,11 +208,19 @@ def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord
                 continue
 
             try:
-                await db.add_tank(name, tier, ttype, interaction.user.display_name, utils.utc_now_z())
-                added += 1
+                name = utils.validate_text("Tank name", name, 64)
             except Exception as e:
-            # Most common: unique constraint (already exists). Treat as skip.
-                skipped += 1
+                errors.append(f"Line {i}: invalid name '{name}': {e}")
+                continue
+
+            to_add.append((name, tier, ttype))
+
+        if to_add:
+            added, skipped = await db.add_tanks_bulk(
+                to_add,
+                interaction.user.display_name,
+                created_at,
+            )
 
         msg = [
             f"Parsed: **{reader.line_num}** lines",

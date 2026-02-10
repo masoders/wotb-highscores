@@ -1,23 +1,79 @@
 # Commands
 
-## Highscore
-- `/highscore submit player tank score`
-  - Commander-only (role name configured by `COMMANDER_ROLE_NAME`)
-- `/highscore show [tier] [type]`
-- `/highscore history [limit]`
+Legend:
+- Required params: `<param>`
+- Optional params: `[param]`
+- Types: `type=light|medium|heavy|td`, `tier=1..10`
 
-## Tank admin
-(Admin = Manage Server or Administrator)
-- `/tank add name tier type`
-- `/tank edit name tier type`
-- `/tank remove name` (blocked if submissions exist for tank)
+## Public
+- `/help`
+  - Description: Show commands you can use based on your role.
+  - Example: `/help`
+- `/highscore show [tier] [type]`
+  - Description: Show current champion (global or filtered).
+  - Example: `/highscore show tier:10 type:heavy`
+- `/highscore qualify <tank> <score> [player]`
+  - Description: Check if a score would become #1 for that tank (no submission).
+  - Example: `/highscore qualify tank:"Tiger II" score:3120 player:"PlayerOne"`
+- `/highscore history [limit]`
+  - Description: Show recent submissions and stats.
+  - Example: `/highscore history limit:10`
+
+## Commander
+- `/highscore submit <player> <tank> <score>`
+  - Description: Submit a new highscore (must beat current tank record).
+  - Example: `/highscore submit player:"PlayerOne" tank:"Tiger II" score:3120`
+- `/tank add <name> <tier> <type>`
+  - Description: Add a tank to roster.
+  - Example: `/tank add name:"Tiger II" tier:8 type:heavy`
+- `/tank edit <name> <tier> <type>`
+  - Description: Edit a tank's tier/type.
+  - Example: `/tank edit name:"Tiger II" tier:8 type:heavy`
+- `/tank remove <name>`
+  - Description: Remove a tank (only if no submissions exist).
+  - Example: `/tank remove name:"Tiger II"`
 - `/tank list [tier] [type]`
-- `/tank changes [limit]`
+  - Description: List tanks with optional filters.
+  - Example: `/tank list tier:8 type:heavy`
 - `/tank export_csv`
-- `/tank preview_import csv_file [delete_missing]`
-- `/tank import_csv csv_file [delete_missing]` (diff-logged)
-- `/tank rebuild_index` (force rebuild all)
-- `/tank rebuild_index_missing` (create/repair missing; validates thread existence and parent)
+  - Description: Export tank roster as CSV.
+  - Example: `/tank export_csv`
+- `/backup run_now`
+  - Description: Run database backup immediately.
+  - Example: `/backup run_now`
+- `/backup status`
+  - Description: Show backup schedule and latest status.
+  - Example: `/backup status`
+- `/backup verify_latest [scan_limit]`
+  - Description: Verify integrity of latest backup file in backup channel.
+  - Example: `/backup verify_latest scan_limit:80`
+
+## Admin (Manage Server or Administrator)
+- `/highscore import_scores <file> [dry_run] [confirm] [update_index]`
+  - Description: Import historical scores from CSV.
+  - Example (preview): `/highscore import_scores file:import.csv dry_run:true`
+  - Example (apply): `/highscore import_scores file:import.csv dry_run:false confirm:YES update_index:true`
+- `/tank changes [limit]`
+  - Description: Show tank change log.
+  - Example: `/tank changes limit:20`
+- `/tank preview_import <csv_file> [delete_missing]`
+  - Description: Preview roster CSV changes without applying.
+  - Example: `/tank preview_import csv_file:tanks.csv delete_missing:false`
+- `/tank import_csv <file>`
+  - Description: Import tanks from CSV (`name,tier,type`).
+  - Example: `/tank import_csv file:tanks.csv`
+- `/tank rebuild_index`
+  - Description: Rebuild all forum index threads.
+  - Example: `/tank rebuild_index`
+- `/tank rebuild_index_missing`
+  - Description: Create/repair missing index threads only.
+  - Example: `/tank rebuild_index_missing`
+- `/system health`
+  - Description: Show runtime, DB, backup, and dashboard health.
+  - Example: `/system health`
+- `/system reload`
+  - Description: Reload command modules and sync slash commands.
+  - Example: `/system reload`
 
 # Forum Index Rules
 - One thread per Tier (1..10) + Type (light/medium/heavy/td)

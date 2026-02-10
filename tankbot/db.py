@@ -272,10 +272,19 @@ async def top_holders_by_tier_type(limit: int = 10):
 
 async def counts():
     async with aiosqlite.connect(config.DB_PATH) as db:
-        c1 = await (await db.execute("SELECT COUNT(*) FROM tanks")).fetchone()
-        c2 = await (await db.execute("SELECT COUNT(*) FROM submissions")).fetchone()
-        c3 = await (await db.execute("SELECT COUNT(*) FROM tank_index_posts")).fetchone()
-        return int(c1[0]), int(c2[0]), int(c3[0])
+        cur = await db.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM tanks) AS tanks_count,
+                (SELECT COUNT(*) FROM submissions) AS submissions_count,
+                (SELECT COUNT(*) FROM tank_index_posts) AS index_count
+            """
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        if not row:
+            return 0, 0, 0
+        return int(row[0]), int(row[1]), int(row[2])
 
 async def migration_version() -> int:
     async with aiosqlite.connect(config.DB_PATH) as db:
@@ -301,6 +310,58 @@ async def add_tank(name: str, tier: int, ttype: str, actor: str, created_at: str
         )
         await db.commit()
     await log_tank_change("add", f"{name}|tier={tier}|type={ttype}", actor, created_at)
+
+async def add_tanks_bulk(rows: list[tuple[str, int, str]], actor: str, created_at: str) -> tuple[int, int]:
+    """
+    Add many tanks in one transaction.
+    Returns (added, skipped_existing_or_duplicate_in_payload).
+    """
+    if not rows:
+        return 0, 0
+
+    normalized_rows: list[tuple[str, str, int, str, str]] = []
+    for name, tier, ttype in rows:
+        normalized_rows.append(
+            (
+                str(name),
+                utils.norm_tank_name(str(name)),
+                int(tier),
+                str(ttype),
+                str(created_at),
+            )
+        )
+
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute("SELECT name_norm FROM tanks")
+        existing = {str(r[0]) for r in await cur.fetchall()}
+        await cur.close()
+
+        to_insert: list[tuple[str, str, int, str, str]] = []
+        seen_in_payload: set[str] = set()
+        for row in normalized_rows:
+            _name, name_norm, _tier, _ttype, _created = row
+            if name_norm in existing or name_norm in seen_in_payload:
+                continue
+            seen_in_payload.add(name_norm)
+            to_insert.append(row)
+
+        if to_insert:
+            await db.executemany(
+                "INSERT INTO tanks (name, name_norm, tier, type, created_at) VALUES (?,?,?,?,?)",
+                to_insert,
+            )
+            await db.executemany(
+                "INSERT INTO tank_changes (action, details, actor, created_at) VALUES (?,?,?,?)",
+                [
+                    ("add", f"{name}|tier={tier}|type={ttype}", actor, created_at)
+                    for (name, _name_norm, tier, ttype, _created_at) in to_insert
+                ],
+            )
+            await db.commit()
+
+    added = len(to_insert)
+    skipped = len(rows) - added
+    return added, skipped
 
 async def edit_tank(name: str, tier: int, ttype: str, actor: str, created_at: str):
     async with aiosqlite.connect(config.DB_PATH) as db:
@@ -421,6 +482,15 @@ async def list_tier_type_buckets():
         rows = await cur.fetchall()
         await cur.close()
     return [(int(r["tier"]), str(r["type"])) for r in rows]
+
+async def list_index_mappings() -> set[tuple[int, str]]:
+    sql = "SELECT tier, type FROM tank_index_posts"
+    async with aiosqlite.connect(config.DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(sql)
+        rows = await cur.fetchall()
+        await cur.close()
+    return {(int(r["tier"]), str(r["type"])) for r in rows}
 
 async def get_tank_canonical(tank_input: str):
     """Return (canonical_name, tier, type) for any user-entered tank name (case-insensitive)."""
