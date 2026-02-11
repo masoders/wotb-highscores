@@ -190,6 +190,7 @@ h1 {
   padding: 8px 10px 10px;
 }
 .view-panel[data-main-view="player"] { display: none; }
+.view-panel[data-main-view="stats"] { display: none; }
 table {
   width: 100%;
   border-collapse: collapse;
@@ -239,12 +240,41 @@ tbody tr:hover { background: #253a5a66; }
   color: var(--muted);
   font-size: 0.88rem;
 }
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.stats-card {
+  border: 1px solid #2a3f63;
+  border-radius: 12px;
+  background: #13223dcc;
+  padding: 12px;
+}
+.stats-title {
+  margin: 0 0 10px;
+  color: #dce8ff;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+.stats-kpi {
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+}
+.stats-table th, .stats-table td {
+  padding: 8px 7px;
+  font-size: 0.88rem;
+}
+.stats-rank, .stats-count, .stats-score { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 860px) {
   .hide-sm { display: none; }
   .col-tank { width: 58%; }
   .col-score { width: 22%; }
   .col-player { width: 20%; }
   th, td { padding: 9px 7px; }
+  .stats-grid { grid-template-columns: 1fr; }
 }
 """
 
@@ -343,6 +373,80 @@ def _render_player_blocks(rows: list[dict]) -> str:
     return "".join(out)
 
 
+def _render_stats_top_per_tier(rows: list[tuple[int, int, str, str, int]]) -> str:
+    grouped: dict[int, list[tuple[int, int, str, str, int]]] = defaultdict(list)
+    for tier, rank, tank_name, player_name, score in rows:
+        grouped[int(tier)].append((int(tier), int(rank), str(tank_name), str(player_name), int(score)))
+
+    out: list[str] = []
+    for tier in sorted(grouped.keys(), reverse=True):
+        out.extend(
+            [
+                "<details class=\"type-block\" open>",
+                "<summary class=\"type-head\">",
+                f"<div class=\"type-title\"><span class=\"badge\">Tier {tier}</span></div>",
+                "<span class=\"type-count\">Top 3 scores</span>",
+                "</summary>",
+                "<div class=\"table-wrap\">",
+                "<table class=\"stats-table\">",
+                "<thead><tr><th class=\"stats-rank\">#</th><th class=\"stats-score\">Score</th><th>Player</th><th>Tank</th></tr></thead>",
+                "<tbody>",
+            ]
+        )
+        for _tier, rank, tank_name, player_name, score in grouped[tier]:
+            out.append(
+                "<tr>"
+                f"<td class=\"stats-rank\">{rank}</td>"
+                f"<td class=\"stats-score\">{escape(_format_score(score))}</td>"
+                f"<td>{escape(player_name)}</td>"
+                f"<td>{escape(tank_name)}</td>"
+                "</tr>"
+            )
+        out.extend(["</tbody>", "</table>", "</div>", "</details>"])
+    if not out:
+        return "<p class=\"muted\">No submission data yet.</p>"
+    return "".join(out)
+
+
+def _render_stats_tanks(rows: list[tuple[str, int]]) -> str:
+    out: list[str] = [
+        "<table class=\"stats-table\">",
+        "<thead><tr><th class=\"stats-rank\">#</th><th>Tank</th><th class=\"stats-count\">Submissions</th></tr></thead>",
+        "<tbody>",
+    ]
+    for i, (tank_name, count) in enumerate(rows, start=1):
+        out.append(
+            "<tr>"
+            f"<td class=\"stats-rank\">{i}</td>"
+            f"<td>{escape(str(tank_name))}</td>"
+            f"<td class=\"stats-count\">{int(count)}</td>"
+            "</tr>"
+        )
+    if not rows:
+        out.append("<tr><td class=\"muted\" colspan=\"3\">No data</td></tr>")
+    out.extend(["</tbody>", "</table>"])
+    return "".join(out)
+
+
+def _render_stats_time(rows: list[tuple[str, int]], label: str) -> str:
+    out: list[str] = [
+        "<table class=\"stats-table\">",
+        f"<thead><tr><th>{escape(label)}</th><th class=\"stats-count\">Submissions</th></tr></thead>",
+        "<tbody>",
+    ]
+    for key, count in rows:
+        out.append(
+            "<tr>"
+            f"<td>{escape(str(key))}</td>"
+            f"<td class=\"stats-count\">{int(count)}</td>"
+            "</tr>"
+        )
+    if not rows:
+        out.append("<tr><td class=\"muted\" colspan=\"2\">No data</td></tr>")
+    out.extend(["</tbody>", "</table>"])
+    return "".join(out)
+
+
 def _build_script() -> str:
     return """
 (() => {
@@ -398,6 +502,11 @@ def _render_html(
     grouped: dict[int, dict[str, list[dict]]],
     player_rows: list[dict],
     tank_total: int,
+    top_per_tier_rows: list[tuple[int, int, str, str, int]],
+    top_tanks_rows: list[tuple[str, int]],
+    unique_player_count: int,
+    yearly_rows: list[tuple[str, int]],
+    monthly_rows: list[tuple[str, int]],
 ) -> str:
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     banner = ""
@@ -435,6 +544,7 @@ def _render_html(
         "<div class=\"view-toggle\" role=\"group\" aria-label=\"Leaderboard view\">",
         "<button type=\"button\" data-view-btn=\"tank\" class=\"active\" aria-pressed=\"true\">By Tank</button>",
         "<button type=\"button\" data-view-btn=\"player\" aria-pressed=\"false\">By Player</button>",
+        "<button type=\"button\" data-view-btn=\"stats\" aria-pressed=\"false\">Statistics</button>",
         "</div>",
         "<div class=\"bulk-actions\" role=\"group\" aria-label=\"Expand and collapse\">",
         "<button type=\"button\" data-bulk-action=\"collapse\">Collapse All</button>",
@@ -497,6 +607,38 @@ def _render_html(
             "</section>",
         ]
     )
+    content.extend(
+        [
+            "<section class=\"view-panel\" data-main-view=\"stats\">",
+            "<div class=\"tier-card\">",
+            "<div class=\"tier-body\">",
+            "<div class=\"stats-grid\">",
+            "<div class=\"stats-card\">",
+            "<h3 class=\"stats-title\">Unique Players</h3>",
+            f"<div class=\"stats-kpi\">{unique_player_count}</div>",
+            "</div>",
+            "<div class=\"stats-card\">",
+            "<h3 class=\"stats-title\">Top 10 Most Recorded Tanks</h3>",
+            _render_stats_tanks(top_tanks_rows),
+            "</div>",
+            "<div class=\"stats-card\">",
+            "<h3 class=\"stats-title\">Submissions Per Year</h3>",
+            _render_stats_time(yearly_rows, "Year"),
+            "</div>",
+            "<div class=\"stats-card\">",
+            "<h3 class=\"stats-title\">Submissions Per Month</h3>",
+            _render_stats_time(monthly_rows, "Month"),
+            "</div>",
+            "</div>",
+            "<div class=\"stats-card\" style=\"margin-top: 14px;\">",
+            "<h3 class=\"stats-title\">Top 3 Per Tier (all tanks)</h3>",
+            _render_stats_top_per_tier(top_per_tier_rows),
+            "</div>",
+            "</div>",
+            "</div>",
+            "</section>",
+        ]
+    )
 
     content.extend(
         [
@@ -517,6 +659,11 @@ async def generate_leaderboard_page() -> str | None:
         return None
 
     tanks = await db.list_tanks()
+    top_per_tier_rows = await db.stats_top_per_tier(limit_per_tier=3)
+    top_tanks_rows = await db.stats_most_recorded_tanks(limit=10)
+    unique_player_count = await db.stats_unique_player_count()
+    yearly_rows = await db.stats_submissions_by_year()
+    monthly_rows = await db.stats_submissions_by_month()
     grouped: dict[int, dict[str, list[dict]]] = defaultdict(dict)
     player_rows: list[dict] = []
     seen_buckets: set[tuple[int, str]] = set()
@@ -544,6 +691,11 @@ async def generate_leaderboard_page() -> str | None:
         grouped=grouped,
         player_rows=player_rows,
         tank_total=len(tanks),
+        top_per_tier_rows=top_per_tier_rows,
+        top_tanks_rows=top_tanks_rows,
+        unique_player_count=unique_player_count,
+        yearly_rows=yearly_rows,
+        monthly_rows=monthly_rows,
     )
     output_path = Path(config.WEB_OUTPUT_PATH)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -21,8 +21,14 @@ Legend:
 
 ## Commander
 - `/highscore submit <player> <tank> <score>`
-  - Description: Submit a new highscore (must beat current tank record).
+  - Description: Submit a new highscore (must beat current tank record). Player names are normalized and existing canonical names are reused.
   - Example: `/highscore submit player:"PlayerOne" tank:"Tiger II" score:3120`
+- `/highscore edit <submission_id> <score>`
+  - Description: Edit an existing submission score by id.
+  - Example: `/highscore edit submission_id:245 score:7210`
+- `/highscore delete <submission_id>`
+  - Description: Delete an existing submission by id.
+  - Example: `/highscore delete submission_id:245`
 - `/highscore refresh_web`
   - Description: Regenerate static leaderboard webpage manually.
   - Example: `/highscore refresh_web`
@@ -56,6 +62,9 @@ Legend:
   - Description: Import historical scores from CSV.
   - Example (preview): `/highscore import_scores file:import.csv dry_run:true`
   - Example (apply): `/highscore import_scores file:import.csv dry_run:false confirm:YES update_index:true`
+- `/highscore changes [limit]`
+  - Description: Show score audit trail (add/edit/delete with actor and timestamps).
+  - Example: `/highscore changes limit:20`
 - `/tank changes [limit]`
   - Description: Show tank change log.
   - Example: `/tank changes limit:20`

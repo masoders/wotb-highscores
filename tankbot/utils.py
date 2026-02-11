@@ -59,7 +59,11 @@ def can_manage(member: discord.Member) -> bool:
     return member.guild_permissions.manage_guild or member.guild_permissions.administrator
 
 def normalize_player(name: str) -> str:
-    return name.strip().lower()
+    s = unicodedata.normalize("NFKC", (name or ""))
+    s = s.replace("\u00a0", " ")
+    s = s.strip().casefold()
+    s = _WS_RE.sub(" ", s)
+    return s
 
 def utc_now_z() -> str:
     return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
