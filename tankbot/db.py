@@ -1,4 +1,5 @@
 import aiosqlite
+import difflib
 from . import config, utils
 
 SCHEMA = """
@@ -29,6 +30,20 @@ CREATE TABLE IF NOT EXISTS tank_changes (
     details TEXT NOT NULL,
     actor TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS score_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    submission_id INTEGER,
+    tank_name TEXT NOT NULL,
+    player_name_raw TEXT NOT NULL,
+    player_name_norm TEXT NOT NULL,
+    old_score INTEGER,
+    new_score INTEGER,
+    actor TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    details TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS tank_index_posts (
@@ -108,11 +123,222 @@ async def _migration_003_add_query_indexes(db: aiosqlite.Connection):
         "ON tanks (tier, type, name)"
     )
 
+async def _migration_004_add_score_change_indexes(db: aiosqlite.Connection):
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_score_changes_created_at "
+        "ON score_changes (created_at DESC, id DESC)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_score_changes_submission_id "
+        "ON score_changes (submission_id)"
+    )
+
+async def _migration_005_backfill_player_name_norm(db: aiosqlite.Connection):
+    cur = await db.execute(
+        """
+        SELECT id, player_name_raw, player_name_norm, tank_name, score, submitted_by, created_at
+        FROM submissions
+        ORDER BY id ASC
+        """
+    )
+    rows = await cur.fetchall()
+    await cur.close()
+    if not rows:
+        return
+
+    # Build the target normalized key from current normalization rules.
+    normalized_rows: list[tuple[int, str, str, str, int, str, str]] = []
+    for sid, player_raw, player_norm, tank_name, score, submitted_by, created_at in rows:
+        raw = str(player_raw or "")
+        existing_norm = str(player_norm or "")
+        new_norm = utils.normalize_player(raw)
+        if not new_norm:
+            # Keep a stable fallback for malformed historical rows.
+            new_norm = existing_norm or f"legacy-{int(sid)}"
+        normalized_rows.append(
+            (
+                int(sid),
+                raw,
+                new_norm,
+                str(tank_name),
+                int(score),
+                str(submitted_by),
+                str(created_at),
+            )
+        )
+
+    by_key: dict[tuple[str, str], list[tuple[int, str, str, str, int, str, str]]] = {}
+    for row in normalized_rows:
+        sid, _raw, new_norm, tank_name, _score, _submitted_by, _created_at = row
+        key = (tank_name, new_norm)
+        by_key.setdefault(key, []).append(row)
+
+    ids_to_delete: set[int] = set()
+    ids_to_update_norm: list[tuple[str, int]] = []
+
+    for (_tank_name, _new_norm), grouped in by_key.items():
+        # Keep the strongest row when legacy variants collapse:
+        # higher score first, then latest created_at, then highest id.
+        grouped_sorted = sorted(
+            grouped,
+            key=lambda r: (int(r[4]), str(r[6]), int(r[0])),
+            reverse=True,
+        )
+        winner = grouped_sorted[0]
+        winner_id = int(winner[0])
+
+        for row in grouped_sorted[1:]:
+            ids_to_delete.add(int(row[0]))
+
+        ids_to_update_norm.append((str(winner[2]), winner_id))
+
+    if ids_to_delete:
+        await db.executemany(
+            "DELETE FROM submissions WHERE id = ?",
+            [(sid,) for sid in sorted(ids_to_delete)],
+        )
+        # Best-effort audit for migration dedupe actions.
+        await db.executemany(
+            """
+            INSERT INTO score_changes (
+                action, submission_id, tank_name, player_name_raw, player_name_norm,
+                old_score, new_score, actor, created_at, details
+            )
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                (
+                    "delete",
+                    int(sid),
+                    str(tank_name),
+                    str(player_raw),
+                    str(new_norm),
+                    int(score),
+                    None,
+                    "migration",
+                    utils.utc_now_z(),
+                    "dedupe-after-player-normalization-backfill",
+                )
+                for sid, player_raw, new_norm, tank_name, score, _submitted_by, _created_at in normalized_rows
+                if int(sid) in ids_to_delete
+            ],
+        )
+
+    if ids_to_update_norm:
+        await db.executemany(
+            "UPDATE submissions SET player_name_norm = ? WHERE id = ?",
+            ids_to_update_norm,
+        )
+
+    cur = await db.execute(
+        """
+        SELECT tank_name, player_name_norm, COUNT(*)
+        FROM submissions
+        GROUP BY tank_name, player_name_norm
+        HAVING COUNT(*) > 1
+        """
+    )
+    collisions = await cur.fetchall()
+    await cur.close()
+    if collisions:
+        sample = ", ".join([f"{t}:{p}({c})" for t, p, c in collisions[:5]])
+        raise RuntimeError(
+            "Duplicate (tank_name, player_name_norm) rows remain after player normalization backfill: "
+            + sample
+        )
+
+async def _migration_006_canonicalize_player_display_names(db: aiosqlite.Connection):
+    # Pick one canonical display value per normalized name:
+    # latest created_at, then latest id.
+    cur = await db.execute(
+        """
+        WITH ranked AS (
+            SELECT
+                player_name_norm,
+                player_name_raw,
+                created_at,
+                id,
+                ROW_NUMBER() OVER (
+                    PARTITION BY player_name_norm
+                    ORDER BY created_at DESC, id DESC
+                ) AS rn
+            FROM submissions
+        )
+        SELECT player_name_norm, player_name_raw
+        FROM ranked
+        WHERE rn = 1
+        """
+    )
+    canon_rows = await cur.fetchall()
+    await cur.close()
+    if not canon_rows:
+        return
+
+    canonical_by_norm = {
+        str(norm): str(raw)
+        for norm, raw in canon_rows
+        if norm and raw
+    }
+    if not canonical_by_norm:
+        return
+
+    cur = await db.execute(
+        "SELECT id, player_name_norm, player_name_raw, tank_name, score FROM submissions"
+    )
+    existing_rows = await cur.fetchall()
+    await cur.close()
+
+    updates: list[tuple[str, int]] = []
+    audit_rows: list[tuple[str, int, str, str, str, int, int, str, str, str]] = []
+    now = utils.utc_now_z()
+
+    for sid, norm, raw, tank_name, score in existing_rows:
+        norm_s = str(norm or "")
+        raw_s = str(raw or "")
+        canonical = canonical_by_norm.get(norm_s, raw_s)
+        if canonical == raw_s:
+            continue
+        updates.append((canonical, int(sid)))
+        audit_rows.append(
+            (
+                "edit",
+                int(sid),
+                str(tank_name),
+                canonical,
+                norm_s,
+                int(score),
+                int(score),
+                "migration",
+                now,
+                f"canonicalize-player-display:{raw_s}->{canonical}",
+            )
+        )
+
+    if updates:
+        await db.executemany(
+            "UPDATE submissions SET player_name_raw = ? WHERE id = ?",
+            updates,
+        )
+    if audit_rows:
+        await db.executemany(
+            """
+            INSERT INTO score_changes (
+                action, submission_id, tank_name, player_name_raw, player_name_norm,
+                old_score, new_score, actor, created_at, details
+            )
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            audit_rows,
+        )
+
 async def _run_migrations(db: aiosqlite.Connection):
     migrations = [
         (1, _migration_001_cleanup_submission_indexes),
         (2, _migration_002_backfill_tank_name_norm),
         (3, _migration_003_add_query_indexes),
+        (4, _migration_004_add_score_change_indexes),
+        (5, _migration_005_backfill_player_name_norm),
+        (6, _migration_006_canonicalize_player_display_names),
     ]
     for version, fn in migrations:
         cur = await db.execute(
@@ -158,6 +384,180 @@ async def list_tanks(tier: int | None = None, ttype: str | None = None):
         cur = await db.execute(q, tuple(args))
         return await cur.fetchall()
 
+async def _log_score_change_conn(
+    conn: aiosqlite.Connection,
+    *,
+    action: str,
+    submission_id: int | None,
+    tank_name: str,
+    player_name_raw: str,
+    player_name_norm: str,
+    old_score: int | None,
+    new_score: int | None,
+    actor: str,
+    created_at: str,
+    details: str = "",
+):
+    await conn.execute(
+        """
+        INSERT INTO score_changes (
+            action, submission_id, tank_name, player_name_raw, player_name_norm,
+            old_score, new_score, actor, created_at, details
+        )
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            action,
+            submission_id,
+            tank_name,
+            player_name_raw,
+            player_name_norm,
+            old_score,
+            new_score,
+            actor,
+            created_at,
+            details,
+        ),
+    )
+
+async def get_player_name_canonical(player_input: str) -> str:
+    player_norm = utils.normalize_player(player_input)
+    if not player_norm:
+        return player_input
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT player_name_raw
+            FROM submissions
+            WHERE player_name_norm = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (player_norm,),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+    return str(row[0]) if row and row[0] else player_input
+
+async def suggest_player_names(player_input: str, limit: int = 3) -> list[str]:
+    candidate = (player_input or "").strip()
+    if not candidate:
+        return []
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            """
+            WITH ranked AS (
+                SELECT
+                    player_name_norm,
+                    player_name_raw,
+                    created_at,
+                    id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY player_name_norm
+                        ORDER BY created_at DESC, id DESC
+                    ) AS rn
+                FROM submissions
+            )
+            SELECT player_name_raw
+            FROM ranked
+            WHERE rn = 1
+            ORDER BY created_at DESC, id DESC
+            LIMIT 500
+            """
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+    choices = [str(r[0]) for r in rows if r and r[0]]
+    if not choices:
+        return []
+
+    exact_norm = utils.normalize_player(candidate)
+    filtered = [c for c in choices if utils.normalize_player(c) != exact_norm]
+    return difflib.get_close_matches(candidate, filtered, n=max(1, min(limit, 5)), cutoff=0.82)
+
+async def list_player_names(query: str = "", limit: int = 25) -> list[str]:
+    q = (query or "").strip()
+    limit = max(1, min(limit, 25))
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        if q:
+            cur = await db.execute(
+                """
+                WITH ranked AS (
+                    SELECT
+                        player_name_norm,
+                        player_name_raw,
+                        created_at,
+                        id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY player_name_norm
+                            ORDER BY created_at DESC, id DESC
+                        ) AS rn
+                    FROM submissions
+                )
+                SELECT player_name_raw
+                FROM ranked
+                WHERE rn = 1 AND player_name_raw LIKE ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (f"%{q}%", limit),
+            )
+        else:
+            cur = await db.execute(
+                """
+                WITH ranked AS (
+                    SELECT
+                        player_name_norm,
+                        player_name_raw,
+                        created_at,
+                        id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY player_name_norm
+                            ORDER BY created_at DESC, id DESC
+                        ) AS rn
+                    FROM submissions
+                )
+                SELECT player_name_raw
+                FROM ranked
+                WHERE rn = 1
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+        rows = await cur.fetchall()
+        await cur.close()
+    return [str(r[0]) for r in rows if r and r[0]]
+
+async def canonical_player_name_map() -> dict[str, str]:
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            """
+            WITH ranked AS (
+                SELECT
+                    player_name_norm,
+                    player_name_raw,
+                    created_at,
+                    id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY player_name_norm
+                        ORDER BY created_at DESC, id DESC
+                    ) AS rn
+                FROM submissions
+            )
+            SELECT player_name_norm, player_name_raw
+            FROM ranked
+            WHERE rn = 1
+            """
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+    return {
+        str(r[0]): str(r[1])
+        for r in rows
+        if r and r[0] and r[1]
+    }
+
 async def insert_submission(
     player_raw: str,
     player_norm: str,
@@ -166,20 +566,84 @@ async def insert_submission(
     submitted_by: str,
     created_at: str):
     async with aiosqlite.connect(config.DB_PATH) as conn:
+        cur = await conn.execute(
+            """
+            SELECT id, score, player_name_raw
+            FROM submissions
+            WHERE tank_name = ? AND player_name_norm = ?
+            LIMIT 1
+            """,
+            (tank_name, player_norm),
+        )
+        existing = await cur.fetchone()
+        await cur.close()
+
+        if existing is None:
+            cur = await conn.execute(
+                """
+                INSERT INTO submissions (player_name_raw, player_name_norm, tank_name, score, submitted_by, created_at)
+                VALUES (?,?,?,?,?,?)
+                """,
+                (player_raw, player_norm, tank_name, score, submitted_by, created_at),
+            )
+            submission_id = int(cur.lastrowid)
+            await _log_score_change_conn(
+                conn,
+                action="add",
+                submission_id=submission_id,
+                tank_name=tank_name,
+                player_name_raw=player_raw,
+                player_name_norm=player_norm,
+                old_score=None,
+                new_score=score,
+                actor=submitted_by,
+                created_at=created_at,
+            )
+            await conn.commit()
+            return {
+                "status": "added",
+                "submission_id": submission_id,
+                "old_score": None,
+                "new_score": score,
+            }
+
+        submission_id, existing_score, _existing_player_raw = int(existing[0]), int(existing[1]), str(existing[2])
+        if score <= existing_score:
+            return {
+                "status": "ignored",
+                "submission_id": submission_id,
+                "old_score": existing_score,
+                "new_score": score,
+            }
+
         await conn.execute(
             """
-            INSERT INTO submissions (player_name_raw, player_name_norm, tank_name, score, submitted_by, created_at)
-            VALUES (?,?,?,?,?,?)
-            ON CONFLICT(tank_name, player_name_norm) DO UPDATE SET
-                player_name_raw = excluded.player_name_raw,
-                score = excluded.score,
-                submitted_by = excluded.submitted_by,
-                created_at = excluded.created_at
-            WHERE excluded.score > submissions.score
+            UPDATE submissions
+            SET player_name_raw = ?, score = ?, submitted_by = ?, created_at = ?
+            WHERE id = ?
             """,
-            (player_raw, player_norm, tank_name, score, submitted_by, created_at),
+            (player_raw, score, submitted_by, created_at, submission_id),
+        )
+        await _log_score_change_conn(
+            conn,
+            action="edit",
+            submission_id=submission_id,
+            tank_name=tank_name,
+            player_name_raw=player_raw,
+            player_name_norm=player_norm,
+            old_score=existing_score,
+            new_score=score,
+            actor=submitted_by,
+            created_at=created_at,
+            details="upsert-higher-score",
         )
         await conn.commit()
+        return {
+            "status": "updated",
+            "submission_id": submission_id,
+            "old_score": existing_score,
+            "new_score": score,
+        }
 
 async def get_best_for_tank(tank_name: str):
     async with aiosqlite.connect(config.DB_PATH) as db:
@@ -268,6 +732,83 @@ async def top_holders_by_tier_type(limit: int = 10):
         ORDER BY tops DESC, MIN(id) ASC
         LIMIT ?;
         """, (limit,))
+        return await cur.fetchall()
+
+async def stats_top_per_tier(limit_per_tier: int = 3):
+    limit_per_tier = max(1, min(limit_per_tier, 10))
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            """
+            WITH ranked AS (
+                SELECT
+                    t.tier AS tier,
+                    s.tank_name AS tank_name,
+                    s.player_name_raw AS player_name,
+                    s.score AS score,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY t.tier
+                        ORDER BY s.score DESC, s.id ASC
+                    ) AS rn
+                FROM submissions s
+                JOIN tanks t ON t.name = s.tank_name
+            )
+            SELECT tier, rn, tank_name, player_name, score
+            FROM ranked
+            WHERE rn <= ?
+            ORDER BY tier DESC, rn ASC
+            """,
+            (limit_per_tier,),
+        )
+        return await cur.fetchall()
+
+async def stats_most_recorded_tanks(limit: int = 10):
+    limit = max(1, min(limit, 50))
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT tank_name, COUNT(*) AS submissions_count
+            FROM submissions
+            GROUP BY tank_name
+            ORDER BY submissions_count DESC, tank_name ASC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return await cur.fetchall()
+
+async def stats_unique_player_count() -> int:
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(DISTINCT player_name_norm) FROM submissions"
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        return int(row[0] if row and row[0] is not None else 0)
+
+async def stats_submissions_by_year():
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT SUBSTR(created_at, 1, 4) AS year_key, COUNT(*) AS submissions_count
+            FROM submissions
+            WHERE LENGTH(created_at) >= 4
+            GROUP BY year_key
+            ORDER BY year_key DESC
+            """
+        )
+        return await cur.fetchall()
+
+async def stats_submissions_by_month():
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT SUBSTR(created_at, 1, 7) AS month_key, COUNT(*) AS submissions_count
+            FROM submissions
+            WHERE LENGTH(created_at) >= 7
+            GROUP BY month_key
+            ORDER BY month_key DESC
+            """
+        )
         return await cur.fetchall()
 
 async def counts():
@@ -506,36 +1047,205 @@ async def get_tank_canonical(tank_input: str):
     return (str(row["name"]), int(row["tier"]), str(row["type"]))
 
 
+async def get_submission_by_id(submission_id: int):
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT id, player_name_raw, player_name_norm, tank_name, score, submitted_by, created_at
+            FROM submissions
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (int(submission_id),),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        return row
+
+async def edit_submission_score(submission_id: int, new_score: int, actor: str, created_at: str):
+    async with aiosqlite.connect(config.DB_PATH) as conn:
+        cur = await conn.execute(
+            """
+            SELECT id, player_name_raw, player_name_norm, tank_name, score
+            FROM submissions
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (int(submission_id),),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        if not row:
+            return None
+
+        sid = int(row[0])
+        player_raw = str(row[1])
+        player_norm = str(row[2])
+        tank_name = str(row[3])
+        old_score = int(row[4])
+
+        await conn.execute(
+            "UPDATE submissions SET score = ?, submitted_by = ?, created_at = ? WHERE id = ?",
+            (int(new_score), actor, created_at, sid),
+        )
+        await _log_score_change_conn(
+            conn,
+            action="edit",
+            submission_id=sid,
+            tank_name=tank_name,
+            player_name_raw=player_raw,
+            player_name_norm=player_norm,
+            old_score=old_score,
+            new_score=int(new_score),
+            actor=actor,
+            created_at=created_at,
+            details="manual-edit",
+        )
+        await conn.commit()
+    return {
+        "id": sid,
+        "tank_name": tank_name,
+        "old_score": old_score,
+        "new_score": int(new_score),
+    }
+
+async def delete_submission(submission_id: int, actor: str, created_at: str):
+    async with aiosqlite.connect(config.DB_PATH) as conn:
+        cur = await conn.execute(
+            """
+            SELECT id, player_name_raw, player_name_norm, tank_name, score
+            FROM submissions
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (int(submission_id),),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        if not row:
+            return None
+
+        sid = int(row[0])
+        player_raw = str(row[1])
+        player_norm = str(row[2])
+        tank_name = str(row[3])
+        old_score = int(row[4])
+
+        await conn.execute("DELETE FROM submissions WHERE id = ?", (sid,))
+        await _log_score_change_conn(
+            conn,
+            action="delete",
+            submission_id=sid,
+            tank_name=tank_name,
+            player_name_raw=player_raw,
+            player_name_norm=player_norm,
+            old_score=old_score,
+            new_score=None,
+            actor=actor,
+            created_at=created_at,
+            details="manual-delete",
+        )
+        await conn.commit()
+    return {
+        "id": sid,
+        "tank_name": tank_name,
+        "old_score": old_score,
+    }
+
+async def score_changes(limit: int = 25):
+    limit = max(1, min(limit, 100))
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT id, action, submission_id, tank_name, player_name_raw, old_score, new_score, actor, created_at, details
+            FROM score_changes
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return await cur.fetchall()
+
 async def insert_submissions_bulk(rows):
     """
     rows: list of tuples
       (player_raw, player_norm, tank_name, score, submitted_by, created_at)
-    Returns: number of rows attempted (not necessarily inserted/updated).
+    Returns: dict with attempted/added/updated/ignored counters.
     """
     if not rows:
-        return 0
+        return {"attempted": 0, "added": 0, "updated": 0, "ignored": 0}
+    added = 0
+    updated = 0
+    ignored = 0
+    async with aiosqlite.connect(config.DB_PATH) as conn:
+        for player_raw, player_norm, tank_name, score, submitted_by, created_at in rows:
+            cur = await conn.execute(
+                """
+                SELECT id, score, player_name_raw
+                FROM submissions
+                WHERE tank_name = ? AND player_name_norm = ?
+                LIMIT 1
+                """,
+                (tank_name, player_norm),
+            )
+            existing = await cur.fetchone()
+            await cur.close()
 
-    sql = """
-    INSERT INTO submissions (
-        player_name_raw,
-        player_name_norm,
-        tank_name,
-        score,
-        submitted_by,
-        created_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(tank_name, player_name_norm)
-    DO UPDATE SET
-        player_name_raw = excluded.player_name_raw,
-        score = excluded.score,
-        submitted_by = excluded.submitted_by,
-        created_at = excluded.created_at
-    WHERE excluded.score > submissions.score;
-    """
+            if existing is None:
+                cur = await conn.execute(
+                    """
+                    INSERT INTO submissions (
+                        player_name_raw, player_name_norm, tank_name, score, submitted_by, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (player_raw, player_norm, tank_name, score, submitted_by, created_at),
+                )
+                submission_id = int(cur.lastrowid)
+                await _log_score_change_conn(
+                    conn,
+                    action="add",
+                    submission_id=submission_id,
+                    tank_name=tank_name,
+                    player_name_raw=player_raw,
+                    player_name_norm=player_norm,
+                    old_score=None,
+                    new_score=int(score),
+                    actor=submitted_by,
+                    created_at=created_at,
+                    details="bulk-import",
+                )
+                added += 1
+                continue
 
-    async with aiosqlite.connect(config.DB_PATH) as db:
-        await db.executemany(sql, rows)
-        await db.commit()
+            submission_id, existing_score, _existing_player_raw = int(existing[0]), int(existing[1]), str(existing[2])
+            if int(score) <= existing_score:
+                ignored += 1
+                continue
 
-    return len(rows)
+            await conn.execute(
+                """
+                UPDATE submissions
+                SET player_name_raw = ?, score = ?, submitted_by = ?, created_at = ?
+                WHERE id = ?
+                """,
+                (player_raw, int(score), submitted_by, created_at, submission_id),
+            )
+            await _log_score_change_conn(
+                conn,
+                action="edit",
+                submission_id=submission_id,
+                tank_name=tank_name,
+                player_name_raw=player_raw,
+                player_name_norm=player_norm,
+                old_score=existing_score,
+                new_score=int(score),
+                actor=submitted_by,
+                created_at=created_at,
+                details="bulk-import-higher-score",
+            )
+            updated += 1
+
+        await conn.commit()
+
+    return {"attempted": len(rows), "added": added, "updated": updated, "ignored": ignored}
