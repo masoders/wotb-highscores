@@ -20,7 +20,8 @@ def setup(tree: app_commands.CommandTree, *, guild: discord.abc.Snowflake | None
 
         if is_commander:
             lines.append("**Commander commands:**")
-            lines.append("- `/highscore submit` — submit a new score")
+            lines.append("- `/highscore submit|edit|delete` — add or correct scores")
+            lines.append("- `/highscore refresh_web` — regenerate static leaderboard webpage")
             lines.append("- /highscore import_scores — import historical scores from CSV")
             lines.append("- `/tank add|edit|remove|list|export_csv` — roster updates and export")
             lines.append("- `/backup …` — backups and status")
@@ -28,6 +29,7 @@ def setup(tree: app_commands.CommandTree, *, guild: discord.abc.Snowflake | None
 
         if is_admin:
             lines.append("**Admin commands:**")
+            lines.append("- `/highscore changes` — score audit trail")
             lines.append("- `/tank changes|preview_import|import_csv|rebuild_index...` — advanced tank admin")
             lines.append("- `/system health` — system health")
             lines.append("")

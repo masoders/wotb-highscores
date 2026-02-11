@@ -21,6 +21,9 @@ startup.out
 *.db
 *.sqlite
 
+# Generated static web output
+web/
+
 # OS / editor files
 .DS_Store
 .vscode/

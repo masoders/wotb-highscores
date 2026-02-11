@@ -4,7 +4,7 @@ import datetime as dt
 import importlib
 import logging
 
-from . import config, db, backup, health, logging_setup
+from . import config, db, backup, health, logging_setup, static_site
 from .commands import help_cmd, highscore, tank, backup_cmd
 
 intents = discord.Intents.default()
@@ -69,6 +69,11 @@ async def on_ready():
         backup.weekly_backup_loop.start(bot)
 
     await _register_and_sync_commands(reload_modules=False)
+
+    try:
+        await static_site.generate_leaderboard_page()
+    except Exception:
+        logging.getLogger(__name__).exception("Failed to generate static leaderboard page at startup")
 
     logging.getLogger(__name__).info("Logged in as %s (id=%s)", bot.user, bot.user.id)
 

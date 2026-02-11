@@ -3,7 +3,7 @@ import csv
 import discord
 from discord import app_commands
 
-from .. import db, forum_index, utils
+from .. import db, forum_index, utils, static_site
 
 
 class Tank(app_commands.Group):
@@ -17,6 +17,13 @@ def _require_admin(interaction: discord.Interaction) -> bool:
 def _require_commander(interaction: discord.Interaction) -> bool:
     m = interaction.user
     return isinstance(m, discord.Member) and utils.has_commander_role(m)
+
+async def _refresh_webpage():
+    try:
+        await static_site.generate_leaderboard_page()
+    except Exception:
+        # Keep tank operations successful even if page generation fails.
+        return
 
 def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord.Object | None):
     grp = Tank()
@@ -42,6 +49,7 @@ def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord
 
         await db.add_tank(name, tier, type, interaction.user.display_name, utils.utc_now_z())
         await forum_index.targeted_update(bot, tier, type)
+        await _refresh_webpage()
         await interaction.response.send_message(f"✅ Added **{name}** (Tier {tier}, {utils.title_case_type(type)}).", ephemeral=True)
 
     @grp.command(name="edit", description="Edit a tank (commanders only)")
@@ -67,6 +75,7 @@ def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord
         # Update both old and new buckets
         await forum_index.targeted_update(bot, old_tier, old_type)
         await forum_index.targeted_update(bot, tier, type)
+        await _refresh_webpage()
         await interaction.response.send_message(f"✅ Updated **{name}**.", ephemeral=True)
 
     @grp.command(name="remove", description="Remove a tank (commanders only, only if no submissions)")
@@ -86,6 +95,7 @@ def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord
             await interaction.response.send_message(f"❌ {type(e).__name__}: {e}", ephemeral=True)
             return
         await forum_index.targeted_update(bot, tier, ttype)
+        await _refresh_webpage()
         await interaction.response.send_message(f"✅ Removed **{name}**.", ephemeral=True)
 
     @grp.command(name="list", description="List tanks (commanders only)")
@@ -221,6 +231,7 @@ def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord
                 interaction.user.display_name,
                 created_at,
             )
+            await _refresh_webpage()
 
         msg = [
             f"Parsed: **{reader.line_num}** lines",

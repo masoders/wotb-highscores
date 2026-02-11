@@ -3,6 +3,7 @@
 This bot maintains:
 - a **global highscore leaderboard** (filterable by tier/type)
 - an **admin-governed tank roster** stored in SQLite
+- a **static leaderboard webpage** (Tier -> Type -> Tank) regenerated on updates
 - an **indexed Forum channel** with one thread per Tier+Type:
   - canonical thread titles enforced
   - starter post updated + pinned
@@ -60,6 +61,18 @@ SU-100,6,td
 
 ## Commands
 See `docs.md`.
+
+## Static Leaderboard Webpage
+Generated as a static HTML file and refreshed on score/tank updates.
+Manual refresh command (commander): `/highscore refresh_web`
+
+```env
+WEB_LEADERBOARD_ENABLED=1
+WEB_OUTPUT_PATH=web/leaderboard.html
+WEB_CLAN_NAME=Your Clan Name
+WEB_CLAN_MOTTO=Victory through discipline
+WEB_BANNER_URL=
+```
 
 ## Backups
 Enable weekly backups posted to a locked channel:

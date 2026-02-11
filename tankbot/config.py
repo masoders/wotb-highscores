@@ -34,3 +34,10 @@ DASHBOARD_ENABLED = os.getenv("DASHBOARD_ENABLED", "0") in ("1", "true", "True",
 DASHBOARD_BIND = os.getenv("DASHBOARD_BIND", "127.0.0.1")
 DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8080"))
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")  # optional bearer token for access
+
+# Static leaderboard webpage
+WEB_LEADERBOARD_ENABLED = os.getenv("WEB_LEADERBOARD_ENABLED", "1") in ("1", "true", "True", "yes", "YES")
+WEB_OUTPUT_PATH = os.getenv("WEB_OUTPUT_PATH", "web/leaderboard.html")
+WEB_CLAN_NAME = os.getenv("WEB_CLAN_NAME", "Tank Highscore Clan")
+WEB_CLAN_MOTTO = os.getenv("WEB_CLAN_MOTTO", "")
+WEB_BANNER_URL = os.getenv("WEB_BANNER_URL", "")
