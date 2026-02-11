@@ -2,6 +2,8 @@ import discord
 
 from . import config, db, utils
 
+_SNAPSHOT_MARKER = "_Snapshot page "
+
 
 def _split_into_pages(header_lines: list[str], table_lines: list[str], footer_lines: list[str], max_len: int = 1900) -> list[str]:
     """
@@ -80,52 +82,18 @@ async def upsert_bucket_thread(bot: discord.Client, tier: int, ttype: str):
     if not thread_id:
         thread_name = f"Leaderboard — Tier {tier} / {utils.title_case_type(ttype)}"
         thread = await forum.create_thread(name=thread_name, content=pages[0])
-        await db.upsert_index_thread_id(tier, ttype, thread.id, forum.id)
+        thread_obj = thread.thread if hasattr(thread, "thread") else thread
+        await db.upsert_index_thread(tier, ttype, thread_obj.id, forum.id)
 
         for p in pages[1:]:
-            await thread.send(p)
+            await thread_obj.send(p)
         return
 
     # UPDATE EXISTING
     thread = forum.get_thread(thread_id)
     if thread is None:
         thread = await bot.fetch_channel(thread_id)
-
-    # Find the starter message reliably:
-    # 1) use starter_message_id if available
-    starter = None
-    starter_id = getattr(thread, "starter_message_id", None)
-    if starter_id:
-        try:
-            starter = await thread.fetch_message(starter_id)
-        except Exception:
-            starter = None
-
-    # 2) fallback: fetch oldest message in thread
-    if starter is None:
-        async for m in thread.history(limit=1, oldest_first=True):
-            starter = m
-            break
-
-    if starter is None:
-        # If the thread is somehow empty, just post pages[0] and continue
-        starter = await thread.send(pages[0])
-    else:
-        await starter.edit(content=pages[0])
-
-    # Wipe ALL bot-authored messages except starter (no fragile "Snapshot page" substring checks)
-    async for msg in thread.history(limit=None):
-        if msg.id == starter.id:
-            continue
-        if msg.author and bot.user and msg.author.id == bot.user.id:
-            try:
-                await msg.delete()
-            except Exception:
-                pass
-
-    # Post new extra pages
-    for p in pages[1:]:
-        await thread.send(p)
+    await _sync_snapshot_pages(bot, thread, pages, tier, ttype)
 
 async def targeted_update(bot: discord.Client, tier: int, ttype: str):
     await upsert_bucket_thread(bot, tier, ttype)
@@ -169,23 +137,13 @@ async def rebuild_all(bot: discord.Client):
 async def rebuild_missing(bot: discord.Client):
     # Only ensure mappings exist for current tiers/types. If missing mapping, create.
     tanks = await db.list_tanks()
+    mappings = await db.list_index_mappings()
     types = sorted({t[2] for t in tanks})
     tiers = sorted({int(t[1]) for t in tanks})
     for ttype in types:
         for tier in tiers:
-            if await _get_mapping(tier, ttype) is None:
+            if (int(tier), str(ttype)) not in mappings:
                 await upsert_bucket_thread(bot, tier, ttype)
-
-# ---- mapping helpers in DB ----
-async def _get_mapping(tier: int, ttype: str):
-    import aiosqlite
-    async with aiosqlite.connect(config.DB_PATH) as con:
-        cur = await con.execute(
-            "SELECT thread_id FROM tank_index_posts WHERE tier = ? AND type = ?",
-            (tier, ttype),
-        )
-        row = await cur.fetchone()
-        return row
 
 def _sorted_snapshot_rows(rows: list[dict]) -> list[dict]:
     return sorted(
@@ -204,37 +162,88 @@ async def update_bucket_thread_snapshot(bot: discord.Client, forum_channel_id: i
 
     rows = await db.get_bucket_snapshot_rows(tier, type_)
     pages = render_bucket_snapshot_pages(tier, type_, rows)
-    # Resolve starter message robustly (forum starter id can differ in edge cases).
-    starter = None
+    await _sync_snapshot_pages(bot, thread, pages, tier, type_)
+
+async def _resolve_starter_message(thread: discord.Thread) -> discord.Message | None:
     starter_id = getattr(thread, "starter_message_id", None)
     if starter_id:
         try:
-            starter = await thread.fetch_message(starter_id)
+            return await thread.fetch_message(starter_id)
         except Exception:
-            starter = None
-    if starter is None:
-        async for m in thread.history(limit=1, oldest_first=True):
-            starter = m
-            break
+            pass
+    async for msg in thread.history(limit=1, oldest_first=True):
+        return msg
+    return None
 
+def _is_snapshot_page_message(msg: discord.Message) -> bool:
+    return bool((msg.content or "").startswith(_SNAPSHOT_MARKER))
+
+async def _recent_snapshot_page_messages(
+    thread: discord.Thread,
+    *,
+    bot_user_id: int,
+    starter_id: int,
+    desired_extra_pages: int,
+) -> list[discord.Message]:
+    # Bounded scan: enough slack to catch stale pages without walking full history.
+    history_limit = max(30, min(250, desired_extra_pages * 8 + 20))
+    found: list[discord.Message] = []
+    async for msg in thread.history(limit=history_limit):
+        if msg.id == starter_id:
+            continue
+        if not msg.author or msg.author.id != bot_user_id:
+            continue
+        if not _is_snapshot_page_message(msg):
+            continue
+        found.append(msg)
+    found.reverse()  # oldest -> newest
+    return found
+
+async def _sync_snapshot_pages(
+    bot: discord.Client,
+    thread: discord.Thread,
+    pages: list[str],
+    tier: int,
+    ttype: str,
+):
+    if not pages:
+        pages = [f"Leaderboard - Tier {tier} / {utils.title_case_type(ttype)}"]
+
+    starter = await _resolve_starter_message(thread)
     if starter is None:
-        starter = await thread.send(pages[0] if pages else f"Leaderboard - Tier {tier} / {utils.title_case_type(type_)}")
-    elif pages:
+        starter = await thread.send(pages[0])
+    elif starter.content != pages[0]:
         await starter.edit(content=pages[0])
 
-    # Delete all previous bot-authored extra pages.
-    # Page headers don't start with the marker text, so prefix matching is unreliable.
-    async for msg in thread.history(limit=None):
-        if msg.id == starter.id:
-            continue
-        if msg.author and bot.user and msg.author.id == bot.user.id:
+    if bot.user is None:
+        return
+
+    desired_extra = pages[1:]
+    existing_extra = await _recent_snapshot_page_messages(
+        thread,
+        bot_user_id=bot.user.id,
+        starter_id=starter.id,
+        desired_extra_pages=len(desired_extra),
+    )
+
+    keep_n = min(len(existing_extra), len(desired_extra))
+    for idx in range(keep_n):
+        msg = existing_extra[idx]
+        new_content = desired_extra[idx]
+        if msg.content != new_content:
             try:
-                await msg.delete()
+                await msg.edit(content=new_content)
             except Exception:
                 pass
 
-    for p in pages[1:]:
-        await thread.send(p)
+    for msg in existing_extra[keep_n:]:
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+
+    for content in desired_extra[keep_n:]:
+        await thread.send(content)
 
 def render_bucket_snapshot_pages(tier: int, type_: str, rows: list[dict]) -> list[str]:
     title = f"**{utils.title_case_type(type_)} — Tier {tier}**"
