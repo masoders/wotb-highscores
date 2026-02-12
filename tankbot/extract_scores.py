@@ -29,6 +29,15 @@ NO_SUB_RE = re.compile(r"^(?P<tank>.+?)\s+[-\u2013\u2014]+\s+[-\u2013\u2014]+\s*
 # normal scored row: tank + score + player, parsed from the RIGHT
 SCORE_RE = re.compile(r"^(?P<tank>.+)\s+(?P<score>\d{1,6})\s+(?P<player>\S.*)$")
 
+# Known truncation fixes when source text comes from width-limited tables.
+_ALIASES_BY_BUCKET: dict[tuple[int, str, str], str] = {
+    (9, "heavy", "kpfpz"): "KpfPz 70",
+    (10, "medium", "kpfpz"): "KpfPz 50 t",
+    (9, "heavy", "progetto c50 mod."): "Progetto C50 mod. 66",
+    (9, "heavy", "tnh t vz."): "TNH T VZ. 51",
+    (10, "heavy", "vz."): "Vz. 55",
+}
+
 
 def normalize_type(raw: str) -> str:
     t = " ".join(raw.strip().lower().split())
@@ -49,6 +58,67 @@ def normalize_type(raw: str) -> str:
 def clean_tank_name(raw: str) -> str:
     # remove asterisks and collapse whitespace
     return " ".join(raw.replace("*", "").split()).strip()
+
+
+def norm_tank_key(raw: str) -> str:
+    return " ".join((raw or "").strip().lower().split())
+
+
+def load_tank_catalog(path: str) -> tuple[dict[str, str], dict[tuple[int, str], list[tuple[str, str]]]]:
+    """
+    Load a canonical tank catalog from CSV.
+    Accepts either:
+    - name,tier,type
+    - tank_name,tier,type
+    """
+    by_norm: dict[str, str] = {}
+    by_bucket: dict[tuple[int, str], list[tuple[str, str]]] = {}
+    p = Path(path)
+    if not p.exists():
+        return by_norm, by_bucket
+    with p.open("r", encoding="utf-8", errors="replace", newline="") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            name = (row.get("name") or row.get("tank_name") or "").strip()
+            if not name:
+                continue
+            norm = norm_tank_key(name)
+            by_norm.setdefault(norm, name)
+            tier_raw = (row.get("tier") or "").strip()
+            type_raw = (row.get("type") or "").strip()
+            if not tier_raw or not type_raw:
+                continue
+            try:
+                tier = int(tier_raw)
+            except ValueError:
+                continue
+            ttype = normalize_type(type_raw)
+            by_bucket.setdefault((tier, ttype), []).append((norm, name))
+    return by_norm, by_bucket
+
+
+def canonicalize_tank_name(
+    tank: str,
+    tier: int,
+    ttype: str,
+    by_norm: dict[str, str],
+    by_bucket: dict[tuple[int, str], list[tuple[str, str]]],
+) -> str:
+    norm = norm_tank_key(tank)
+    alias = _ALIASES_BY_BUCKET.get((tier, ttype, norm))
+    if alias:
+        return alias
+    direct = by_norm.get(norm)
+    if direct:
+        return direct
+    bucket_names = by_bucket.get((tier, ttype), [])
+    if not bucket_names:
+        return tank
+    # If a truncated name is an unambiguous prefix in this bucket, expand it.
+    candidates = [name for candidate_norm, name in bucket_names if candidate_norm.startswith(norm + " ")]
+    if len(candidates) == 1:
+        return candidates[0]
+    return tank
 
 
 def clean_line(raw: str) -> str:
@@ -92,6 +162,11 @@ def main() -> int:
     ap.add_argument("--scores-out", default="scores.csv", help="Output CSV for scores (default: scores.csv)")
     ap.add_argument("--submitted-by", default="", help="Value for scores.csv submitted_by column")
     ap.add_argument("--created-at", default="", help="Value for scores.csv created_at column (ISO8601 or blank)")
+    ap.add_argument(
+        "--tank-catalog",
+        default="tankbot/tanks.csv",
+        help="Canonical tank CSV (name/tank_name,tier,type) used to repair truncated names",
+    )
     ap.add_argument("--max-score", type=int, default=100000, help="Ignore scores outside 1..max_score (default 100000)")
     ap.add_argument("--strict", action="store_true", help="Exit non-zero if any parsing errors are found")
     args = ap.parse_args()
@@ -104,6 +179,7 @@ def main() -> int:
 
     current_tier: int | None = None
     current_type: str | None = None
+    catalog_by_norm, catalog_by_bucket = load_tank_catalog(args.tank_catalog)
 
     # de-dupe tanks by (tier,type,tank_name)
     tanks_seen: set[tuple[int, str, str]] = set()
@@ -117,22 +193,23 @@ def main() -> int:
 
     for raw_line in content.splitlines():
         line = raw_line.rstrip("\n")
+        line_clean = clean_line(line)
 
-        sec = SECTION_RE.match(line)
+        sec = SECTION_RE.match(line_clean)
         if sec:
             current_tier = int(sec.group("tier"))
             current_type = normalize_type(sec.group("type"))
             continue
 
         # ignore separators and blanks early
-        if not line.strip() or SEPARATOR_RE.match(line.strip()):
+        if not line_clean.strip() or SEPARATOR_RE.match(line_clean.strip()):
             continue
 
         # if we haven't seen a section header yet, skip junk
         if current_tier is None or current_type is None:
             continue
 
-        parsed = parse_tank_line(line)
+        parsed = parse_tank_line(line_clean)
         if not parsed:
             continue
 
@@ -140,7 +217,13 @@ def main() -> int:
             errors.append(parsed["error"])
             continue
 
-        tank = parsed["tank"]
+        tank = canonicalize_tank_name(
+            parsed["tank"],
+            int(current_tier),
+            str(current_type),
+            catalog_by_norm,
+            catalog_by_bucket,
+        )
         # write tank row always (even if no score)
         tank_key = (current_tier, current_type, tank.lower())
         if tank_key not in tanks_seen:

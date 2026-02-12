@@ -1,8 +1,10 @@
 import discord
+import re
 
 from . import config, db, utils
 
 _SNAPSHOT_MARKER = "_Snapshot page "
+_SNAPSHOT_MARKER_RE = re.compile(r"(?m)^_?Snapshot page \d+/\d+_?$")
 
 
 def _split_into_pages(header_lines: list[str], table_lines: list[str], footer_lines: list[str], max_len: int = 1900) -> list[str]:
@@ -176,7 +178,11 @@ async def _resolve_starter_message(thread: discord.Thread) -> discord.Message | 
     return None
 
 def _is_snapshot_page_message(msg: discord.Message) -> bool:
-    return bool((msg.content or "").startswith(_SNAPSHOT_MARKER))
+    content = msg.content or ""
+    if content.startswith(_SNAPSHOT_MARKER):
+        return True
+    # Snapshot marker is embedded as a standalone line after the header.
+    return bool(_SNAPSHOT_MARKER_RE.search(content))
 
 async def _recent_snapshot_page_messages(
     thread: discord.Thread,
@@ -186,7 +192,7 @@ async def _recent_snapshot_page_messages(
     desired_extra_pages: int,
 ) -> list[discord.Message]:
     # Bounded scan: enough slack to catch stale pages without walking full history.
-    history_limit = max(30, min(250, desired_extra_pages * 8 + 20))
+    history_limit = max(100, min(500, desired_extra_pages * 20 + 100))
     found: list[discord.Message] = []
     async for msg in thread.history(limit=history_limit):
         if msg.id == starter_id:

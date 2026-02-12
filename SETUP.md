@@ -57,6 +57,15 @@ Save the **Channel ID**.
 
 Save the **Channel ID**.
 
+#### Audit Log Channel (PRIVATE)
+- Type: Text
+- Bot permissions:
+  - View Channel
+  - Send Messages
+- Admin-only access recommended
+
+Save the **Channel ID**.
+
 #### Forum Channel (Leaderboard Index)
 - Type: Forum
 - Bot permissions:
@@ -109,6 +118,7 @@ CLAN_COMMANDER_ROLE_ID=ROLE_ID
 
 ANNOUNCE_CHANNEL_ID=CHANNEL_ID
 BACKUP_CHANNEL_ID=CHANNEL_ID
+AUDIT_LOG_CHANNEL_ID=CHANNEL_ID
 TANK_INDEX_FORUM_CHANNEL_ID=FORUM_ID
 
 DB_PATH=highscores.db

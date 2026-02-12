@@ -384,6 +384,57 @@ async def list_tanks(tier: int | None = None, ttype: str | None = None):
         cur = await db.execute(q, tuple(args))
         return await cur.fetchall()
 
+async def list_tank_names(query: str = "", limit: int = 25) -> list[str]:
+    q = (query or "").strip()
+    limit = max(1, min(limit, 25))
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        if q:
+            cur = await db.execute(
+                """
+                SELECT name
+                FROM tanks
+                WHERE name LIKE ?
+                ORDER BY tier DESC, type ASC, name ASC
+                LIMIT ?
+                """,
+                (f"%{q}%", limit),
+            )
+        else:
+            cur = await db.execute(
+                """
+                SELECT name
+                FROM tanks
+                ORDER BY tier DESC, type ASC, name ASC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+        rows = await cur.fetchall()
+        await cur.close()
+    return [str(r[0]) for r in rows if r and r[0]]
+
+async def suggest_tank_names(tank_input: str, limit: int = 3) -> list[str]:
+    candidate = (tank_input or "").strip()
+    if not candidate:
+        return []
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT name
+            FROM tanks
+            ORDER BY tier DESC, type ASC, name ASC
+            LIMIT 500
+            """
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+    choices = [str(r[0]) for r in rows if r and r[0]]
+    if not choices:
+        return []
+    exact_norm = utils.norm_tank_name(candidate)
+    filtered = [c for c in choices if utils.norm_tank_name(c) != exact_norm]
+    return difflib.get_close_matches(candidate, filtered, n=max(1, min(limit, 5)), cutoff=0.72)
+
 async def _log_score_change_conn(
     conn: aiosqlite.Connection,
     *,
@@ -1062,7 +1113,14 @@ async def get_submission_by_id(submission_id: int):
         await cur.close()
         return row
 
-async def edit_submission_score(submission_id: int, new_score: int, actor: str, created_at: str):
+async def edit_submission_score(
+    submission_id: int,
+    new_score: int,
+    actor: str,
+    created_at: str,
+    new_player_raw: str | None = None,
+    new_player_norm: str | None = None,
+):
     async with aiosqlite.connect(config.DB_PATH) as conn:
         cur = await conn.execute(
             """
@@ -1079,15 +1137,28 @@ async def edit_submission_score(submission_id: int, new_score: int, actor: str, 
             return None
 
         sid = int(row[0])
-        player_raw = str(row[1])
-        player_norm = str(row[2])
+        old_player_raw = str(row[1])
+        old_player_norm = str(row[2])
         tank_name = str(row[3])
         old_score = int(row[4])
+        player_raw = str(new_player_raw) if new_player_raw is not None else old_player_raw
+        player_norm = str(new_player_norm) if new_player_norm is not None else old_player_norm
 
-        await conn.execute(
-            "UPDATE submissions SET score = ?, submitted_by = ?, created_at = ? WHERE id = ?",
-            (int(new_score), actor, created_at, sid),
-        )
+        try:
+            await conn.execute(
+                """
+                UPDATE submissions
+                SET player_name_raw = ?, player_name_norm = ?, score = ?, submitted_by = ?, created_at = ?
+                WHERE id = ?
+                """,
+                (player_raw, player_norm, int(new_score), actor, created_at, sid),
+            )
+        except aiosqlite.IntegrityError:
+            return {"error": "duplicate_player_for_tank", "tank_name": tank_name}
+
+        details = "manual-edit"
+        if player_raw != old_player_raw:
+            details += f"|player:{old_player_raw}->{player_raw}"
         await _log_score_change_conn(
             conn,
             action="edit",
@@ -1099,12 +1170,14 @@ async def edit_submission_score(submission_id: int, new_score: int, actor: str, 
             new_score=int(new_score),
             actor=actor,
             created_at=created_at,
-            details="manual-edit",
+            details=details,
         )
         await conn.commit()
     return {
         "id": sid,
         "tank_name": tank_name,
+        "old_player_raw": old_player_raw,
+        "new_player_raw": player_raw,
         "old_score": old_score,
         "new_score": int(new_score),
     }
