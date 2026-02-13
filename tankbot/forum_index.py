@@ -1,8 +1,10 @@
 import discord
+import re
 
 from . import config, db, utils
 
 _SNAPSHOT_MARKER = "_Snapshot page "
+_SNAPSHOT_MARKER_RE = re.compile(r"(?m)^_?Snapshot page \d+/\d+_?$")
 
 
 def _split_into_pages(header_lines: list[str], table_lines: list[str], footer_lines: list[str], max_len: int = 1900) -> list[str]:
@@ -100,39 +102,35 @@ async def targeted_update(bot: discord.Client, tier: int, ttype: str):
 
 
 async def rebuild_all(bot: discord.Client):
-    # 1) Get the forum channel
     forum = bot.get_channel(config.TANK_INDEX_FORUM_CHANNEL_ID) or await bot.fetch_channel(config.TANK_INDEX_FORUM_CHANNEL_ID)
+    if not isinstance(forum, discord.ForumChannel):
+        raise TypeError("TANK_INDEX_FORUM_CHANNEL_ID must point to a Forum Channel")
 
-    # 2) Get all buckets from DB (distinct tier/type from tanks)
-    buckets = await db.list_tier_type_buckets()  # you may need to implement or rename
+    # 1) Delete all existing forum threads/posts (active + archived) in this index forum
+    seen_ids: set[int] = set()
+    for th in list(getattr(forum, "threads", []) or []):
+        try:
+            await th.delete()
+            seen_ids.add(int(th.id))
+        except Exception:
+            pass
+    try:
+        async for th in forum.archived_threads(limit=1000):
+            if int(th.id) in seen_ids:
+                continue
+            try:
+                await th.delete()
+                seen_ids.add(int(th.id))
+            except Exception:
+                pass
+    except Exception:
+        pass
 
+    # 2) Clear DB mapping and recreate all buckets from scratch
+    await db.clear_index_threads()
+    buckets = await db.list_tier_type_buckets()
     for tier, type_ in buckets:
-        # 3) Get existing thread mapping (if any)
-        thread_id = await db.get_index_thread_id(tier, type_)  # returns int | None
-
-        # 4) Create thread if missing
-        if not thread_id:
-            title = f"Leaderboard — Tier {tier} / {type_.replace('td', 'Tank Destroyer').title()}"
-            # Create a forum post/thread
-            thread = await forum.create_thread(
-                name=title,
-                content="(initializing…)",  # will be replaced by snapshot edit
-            )
-            # discord.py returns ThreadWithMessage or similar depending on version
-            # Make sure we end up with a Thread object and an id:
-            thread_obj = thread.thread if hasattr(thread, "thread") else thread
-            thread_id = thread_obj.id
-
-            await db.upsert_index_thread(tier, type_, thread_id, config.TANK_INDEX_FORUM_CHANNEL_ID)
-
-        # 5) Now thread_id is guaranteed, update snapshot
-        await update_bucket_thread_snapshot(
-            bot,
-            forum_channel_id=config.TANK_INDEX_FORUM_CHANNEL_ID,
-            thread_id=thread_id,
-            tier=tier,
-            type_=type_,
-        )
+        await upsert_bucket_thread(bot, int(tier), str(type_))
 
 async def rebuild_missing(bot: discord.Client):
     # Only ensure mappings exist for current tiers/types. If missing mapping, create.
@@ -176,7 +174,11 @@ async def _resolve_starter_message(thread: discord.Thread) -> discord.Message | 
     return None
 
 def _is_snapshot_page_message(msg: discord.Message) -> bool:
-    return bool((msg.content or "").startswith(_SNAPSHOT_MARKER))
+    content = msg.content or ""
+    if content.startswith(_SNAPSHOT_MARKER):
+        return True
+    # Snapshot marker is embedded as a standalone line after the header.
+    return bool(_SNAPSHOT_MARKER_RE.search(content))
 
 async def _recent_snapshot_page_messages(
     thread: discord.Thread,
@@ -186,7 +188,7 @@ async def _recent_snapshot_page_messages(
     desired_extra_pages: int,
 ) -> list[discord.Message]:
     # Bounded scan: enough slack to catch stale pages without walking full history.
-    history_limit = max(30, min(250, desired_extra_pages * 8 + 20))
+    history_limit = max(100, min(500, desired_extra_pages * 20 + 100))
     found: list[discord.Message] = []
     async for msg in thread.history(limit=history_limit):
         if msg.id == starter_id:

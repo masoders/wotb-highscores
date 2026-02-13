@@ -8,6 +8,7 @@ GUILD_ID = int(os.getenv("GUILD_ID", "0"))
 
 TANK_INDEX_FORUM_CHANNEL_ID = int(os.getenv("TANK_INDEX_FORUM_CHANNEL_ID", "0"))
 ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID", "0"))
+AUDIT_LOG_CHANNEL_ID = int(os.getenv("AUDIT_LOG_CHANNEL_ID", "0"))
 
 COMMANDER_ROLE_NAME = os.getenv("COMMANDER_ROLE_NAME", "Clan Commander")
 MAX_SCORE = int(os.getenv("MAX_SCORE", "100000"))

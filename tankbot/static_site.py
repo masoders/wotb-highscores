@@ -119,6 +119,52 @@ h1 {
   display: inline-flex;
   gap: 8px;
 }
+.player-tools {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.player-tools label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.player-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.player-search input {
+  border: 1px solid #446291;
+  background: #162746;
+  color: #d0defe;
+  border-radius: 999px;
+  padding: 7px 12px;
+  min-width: 220px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.player-search input::placeholder {
+  color: #91aad8;
+}
+.player-sort-chips {
+  display: inline-flex;
+  gap: 7px;
+}
+.player-sort-chips button {
+  border: 1px solid #446291;
+  background: #162746;
+  color: #d0defe;
+  border-radius: 999px;
+  padding: 7px 11px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+}
+.player-sort-chips button.active {
+  background: linear-gradient(180deg, #2f6ec2, #254f99);
+  color: #eef5ff;
+}
 .bulk-actions button {
   border: 1px solid #446291;
   background: #162746;
@@ -345,11 +391,12 @@ def _render_player_blocks(rows: list[dict]) -> str:
     out: list[str] = []
     for player in sorted(grouped.keys(), key=lambda p: p.casefold()):
         safe_player = escape(player)
+        safe_player_key = escape(player.casefold(), quote=True)
         player_rows = grouped[player]
         tank_count = len(player_rows)
         out.extend(
             [
-                "<details class=\"type-block\" open>",
+                f"<details class=\"type-block\" data-player-key=\"{safe_player_key}\" data-tank-count=\"{tank_count}\" open>",
                 "<summary class=\"type-head\">",
                 f"<div class=\"type-title\"><span class=\"badge\">{safe_player}</span></div>",
                 f"<span class=\"type-count\">{tank_count} tanks</span>",
@@ -454,7 +501,51 @@ def _build_script() -> str:
   const buttons = Array.from(document.querySelectorAll("[data-view-btn]"));
   const actionButtons = Array.from(document.querySelectorAll("[data-bulk-action]"));
   const panels = Array.from(document.querySelectorAll("[data-main-view]"));
+  const playerToolsWrap = document.querySelector("[data-player-tools-wrap]");
+  const playerSortButtons = Array.from(document.querySelectorAll("[data-player-sort-btn]"));
+  const playerSearch = document.querySelector("[data-player-search]");
+  const playerList = document.querySelector("[data-player-list]");
   let current = "tank";
+  let playerSortMode = "name-asc";
+  let playerQuery = "";
+
+  const normalize = (v) => (v || "").toLocaleLowerCase().trim();
+
+  const sortPlayerBlocks = () => {
+    if (!playerList) return;
+    const blocks = Array.from(playerList.querySelectorAll(":scope > details.type-block"));
+    blocks.sort((a, b) => {
+      const aKey = a.getAttribute("data-player-key") || "";
+      const bKey = b.getAttribute("data-player-key") || "";
+      if (playerSortMode === "tank-count-desc") {
+        const aCount = Number(a.getAttribute("data-tank-count") || "0");
+        const bCount = Number(b.getAttribute("data-tank-count") || "0");
+        if (aCount !== bCount) return bCount - aCount;
+      }
+      return aKey.localeCompare(bKey);
+    });
+    blocks.forEach((block) => playerList.appendChild(block));
+  };
+
+  const filterPlayerBlocks = () => {
+    if (!playerList) return;
+    const q = normalize(playerQuery);
+    const blocks = Array.from(playerList.querySelectorAll(":scope > details.type-block"));
+    blocks.forEach((block) => {
+      const key = normalize(block.getAttribute("data-player-key") || "");
+      block.style.display = q && !key.includes(q) ? "none" : "";
+    });
+  };
+
+  const applyPlayerView = () => {
+    sortPlayerBlocks();
+    filterPlayerBlocks();
+    playerSortButtons.forEach((btn) => {
+      const active = (btn.getAttribute("data-player-sort-btn") || "") === playerSortMode;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  };
 
   const update = (view) => {
     current = view;
@@ -468,11 +559,30 @@ def _build_script() -> str:
       btn.classList.toggle("active", active);
       btn.setAttribute("aria-pressed", active ? "true" : "false");
     });
+    if (playerToolsWrap) {
+      playerToolsWrap.style.display = view === "player" ? "inline-flex" : "none";
+    }
   };
 
   buttons.forEach((btn) => {
     btn.addEventListener("click", () => update(btn.getAttribute("data-view-btn") || "tank"));
   });
+
+  if (playerSortButtons.length) {
+    playerSortButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        playerSortMode = btn.getAttribute("data-player-sort-btn") || "name-asc";
+        applyPlayerView();
+      });
+    });
+  }
+  if (playerSearch) {
+    playerSearch.addEventListener("input", () => {
+      playerQuery = playerSearch.value || "";
+      filterPlayerBlocks();
+    });
+  }
+  applyPlayerView();
 
   const setAllDetails = (openState) => {
     const activePanel = document.querySelector(`[data-main-view="${current}"]`);
@@ -550,6 +660,16 @@ def _render_html(
         "<button type=\"button\" data-bulk-action=\"collapse\">Collapse All</button>",
         "<button type=\"button\" data-bulk-action=\"expand\">Expand All</button>",
         "</div>",
+        "<div class=\"player-tools\" data-player-tools-wrap>",
+        "<div class=\"player-sort-chips\" role=\"group\" aria-label=\"Player sorting\">",
+        "<button type=\"button\" data-player-sort-btn=\"name-asc\" aria-pressed=\"true\" class=\"active\">A-Z</button>",
+        "<button type=\"button\" data-player-sort-btn=\"tank-count-desc\" aria-pressed=\"false\">Most Tanks</button>",
+        "</div>",
+        "<div class=\"player-search\">",
+        "<label for=\"player-search\">Find Player</label>",
+        "<input id=\"player-search\" data-player-search type=\"search\" placeholder=\"Type a player name\" autocomplete=\"off\" />",
+        "</div>",
+        "</div>",
         "</div>",
         "<section class=\"view-panel\" data-main-view=\"tank\">",
     ]
@@ -601,7 +721,9 @@ def _render_html(
             "<section class=\"view-panel\" data-main-view=\"player\">",
             "<div class=\"tier-card\">",
             "<div class=\"tier-body\">",
+            "<div data-player-list>",
             _render_player_blocks(player_rows),
+            "</div>",
             "</div>",
             "</div>",
             "</section>",

@@ -29,6 +29,24 @@ def norm_tank_name(s: str) -> str:
     s = re.sub(r"\s+", " ", s)
     return s
 
+def loose_tank_key(s: str) -> str:
+    """
+    Aggressive key used only for tolerant matching during imports.
+    - case/space insensitive
+    - diacritics insensitive
+    - punctuation insensitive
+    - strips words like "number" that appear in some aliases
+    """
+    raw = unicodedata.normalize("NFKD", (s or ""))
+    raw = "".join(ch for ch in raw if not unicodedata.combining(ch))
+    raw = raw.casefold()
+    raw = raw.replace("\u00a0", " ")
+    raw = re.sub(r"\bobj\.\b|\bobj\b", "object", raw)
+    raw = re.sub(r"\bmle\.\b|\bmle\b", " ", raw)
+    raw = re.sub(r"\bnumber\b", " ", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    return re.sub(r"[^a-z0-9]+", "", raw)
+
 def fmt_utc(iso: str | None) -> str:
     if not iso:
         return "—"
