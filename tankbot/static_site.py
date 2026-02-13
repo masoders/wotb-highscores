@@ -3,11 +3,32 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timezone
 from html import escape
+import json
 from pathlib import Path
 
 from . import config, db, utils
 
 TYPE_ORDER = {"heavy": 0, "medium": 1, "light": 2, "td": 3}
+
+
+def _safe_web_text(value: object, *, fallback: str = "—", quote: bool = False) -> str:
+    raw = str(value) if value is not None else fallback
+    if not raw:
+        raw = fallback
+    cleaned = "".join(ch for ch in raw if ch == "\n" or ord(ch) >= 32)
+    # Neutralize mention-like strings for safer sharing/copying contexts.
+    cleaned = cleaned.replace("@", "@\u200b")
+    return escape(cleaned, quote=quote)
+
+
+def _latest_created_at(rows: list[dict]) -> str | None:
+    stamped = [str(r.get("created_at") or "") for r in rows if r.get("created_at")]
+    return max(stamped) if stamped else None
+
+
+def _json_for_html(obj: object) -> str:
+    text = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
 def _sorted_snapshot_rows(rows: list[dict]) -> list[dict]:
@@ -118,6 +139,39 @@ h1 {
 .bulk-actions {
   display: inline-flex;
   gap: 8px;
+}
+.filter-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.filter-tools label {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+.filter-tools select,
+.filter-tools input {
+  border: 1px solid #446291;
+  background: #162746;
+  color: #d0defe;
+  border-radius: 8px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 0.84rem;
+}
+.filter-tools input {
+  min-width: 170px;
+}
+.filter-tools button {
+  border: 1px solid #446291;
+  background: #162746;
+  color: #d0defe;
+  border-radius: 8px;
+  padding: 6px 9px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
 }
 .player-tools {
   display: none;
@@ -234,6 +288,7 @@ h1 {
 }
 .table-wrap {
   padding: 8px 10px 10px;
+  overflow-x: auto;
 }
 .view-panel[data-main-view="player"] { display: none; }
 .view-panel[data-main-view="stats"] { display: none; }
@@ -256,6 +311,10 @@ th {
   text-align: left;
   color: #c3d5ff;
   font-weight: 700;
+  position: sticky;
+  top: 0;
+  background: #162746;
+  z-index: 1;
 }
 .col-tank { width: 44%; }
 .col-type { width: 14%; }
@@ -268,6 +327,14 @@ th {
   font-variant-numeric: tabular-nums;
 }
 tbody tr:hover { background: #253a5a66; }
+.data-row { cursor: pointer; }
+.row-detail { display: none; }
+.row-detail td {
+  white-space: normal;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+.data-row.expanded + .row-detail { display: table-row; }
 .score {
   font-weight: 700;
   color: var(--good);
@@ -316,10 +383,13 @@ tbody tr:hover { background: #253a5a66; }
 .stats-rank, .stats-count, .stats-score { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 860px) {
   .hide-sm { display: none; }
+  .view-controls { align-items: flex-start; }
+  .filter-tools { width: 100%; }
+  .filter-tools input, .filter-tools select { width: 100%; }
   .col-tank { width: 58%; }
   .col-score { width: 22%; }
   .col-player { width: 20%; }
-  th, td { padding: 9px 7px; }
+  th, td { padding: 11px 8px; }
   .stats-grid { grid-template-columns: 1fr; }
 }
 """
@@ -334,17 +404,25 @@ def _format_score(score: int | None) -> str:
 def _render_rows(rows: list[dict]) -> str:
     out: list[str] = []
     for row in rows:
-        tank = escape(str(row.get("tank_name") or "Unknown"))
+        tank = _safe_web_text(row.get("tank_name"), fallback="Unknown")
         score = row.get("score")
-        player = escape(str(row.get("player_name") or "—"))
-        when = escape(utils.fmt_utc(row.get("created_at")))
-        score_text = escape(_format_score(score if isinstance(score, int) else None))
+        player_raw = str(row.get("player_name") or "—")
+        player = _safe_web_text(player_raw)
+        when_raw = utils.fmt_utc(row.get("created_at"))
+        when = _safe_web_text(when_raw)
+        score_text = _safe_web_text(_format_score(score if isinstance(score, int) else None), fallback="-")
+        tier = _safe_web_text(row.get("tier"))
+        ttype = _safe_web_text(utils.title_case_type(str(row.get("type") or "")))
+        player_key = _safe_web_text(player_raw.casefold(), quote=True)
         out.append(
-            "<tr>"
-            f"<td>{tank}</td>"
-            f"<td class=\"score\">{score_text}</td>"
-            f"<td>{player}</td>"
-            f"<td class=\"hide-sm muted\">{when}</td>"
+            f"<tr class=\"data-row\" data-row-toggle=\"1\" data-player-key=\"{player_key}\" tabindex=\"0\">"
+            f"<td data-label=\"Tank\">{tank}</td>"
+            f"<td class=\"score\" data-label=\"Best Score\">{score_text}</td>"
+            f"<td data-label=\"Player\">{player}</td>"
+            f"<td class=\"hide-sm muted\" data-label=\"Updated\">{when}</td>"
+            "</tr>"
+            "<tr class=\"row-detail\">"
+            f"<td colspan=\"4\">Updated: {when} • Tier {tier} • {ttype}</td>"
             "</tr>"
         )
     return "".join(out)
@@ -368,19 +446,22 @@ def _render_player_rows(rows: list[dict]) -> str:
         ),
     )
     for row in sorted_rows:
-        tank = escape(str(row.get("tank_name") or "Unknown"))
-        ttype = escape(utils.title_case_type(str(row.get("type") or "")))
-        tier = escape(str(row.get("tier") or "—"))
+        tank = _safe_web_text(row.get("tank_name"), fallback="Unknown")
+        ttype = _safe_web_text(utils.title_case_type(str(row.get("type") or "")))
+        tier = _safe_web_text(row.get("tier"))
         score = row.get("score")
-        when = escape(utils.fmt_utc(row.get("created_at")))
-        score_text = escape(_format_score(score if isinstance(score, int) else None))
+        when = _safe_web_text(utils.fmt_utc(row.get("created_at")))
+        score_text = _safe_web_text(_format_score(score if isinstance(score, int) else None), fallback="-")
         out.append(
-            "<tr>"
-            f"<td>{tank}</td>"
-            f"<td>{ttype}</td>"
-            f"<td>{tier}</td>"
-            f"<td class=\"score\">{score_text}</td>"
-            f"<td class=\"hide-sm muted\">{when}</td>"
+            "<tr class=\"data-row\" data-row-toggle=\"1\" tabindex=\"0\">"
+            f"<td data-label=\"Tank\">{tank}</td>"
+            f"<td data-label=\"Type\">{ttype}</td>"
+            f"<td data-label=\"Tier\">{tier}</td>"
+            f"<td class=\"score\" data-label=\"Best Score\">{score_text}</td>"
+            f"<td class=\"hide-sm muted\" data-label=\"Updated\">{when}</td>"
+            "</tr>"
+            "<tr class=\"row-detail\">"
+            f"<td colspan=\"5\">Type: {ttype} • Tier {tier} • Updated: {when}</td>"
             "</tr>"
         )
     return "".join(out)
@@ -390,8 +471,8 @@ def _render_player_blocks(rows: list[dict]) -> str:
     grouped = _group_rows_by_player(rows)
     out: list[str] = []
     for player in sorted(grouped.keys(), key=lambda p: p.casefold()):
-        safe_player = escape(player)
-        safe_player_key = escape(player.casefold(), quote=True)
+        safe_player = _safe_web_text(player)
+        safe_player_key = _safe_web_text(player.casefold(), quote=True)
         player_rows = grouped[player]
         tank_count = len(player_rows)
         out.extend(
@@ -444,9 +525,9 @@ def _render_stats_top_per_tier(rows: list[tuple[int, int, str, str, int]]) -> st
             out.append(
                 "<tr>"
                 f"<td class=\"stats-rank\">{rank}</td>"
-                f"<td class=\"stats-score\">{escape(_format_score(score))}</td>"
-                f"<td>{escape(player_name)}</td>"
-                f"<td>{escape(tank_name)}</td>"
+                f"<td class=\"stats-score\">{_safe_web_text(_format_score(score), fallback='-')}</td>"
+                f"<td>{_safe_web_text(player_name)}</td>"
+                f"<td>{_safe_web_text(tank_name)}</td>"
                 "</tr>"
             )
         out.extend(["</tbody>", "</table>", "</div>", "</details>"])
@@ -465,7 +546,7 @@ def _render_stats_tanks(rows: list[tuple[str, int]]) -> str:
         out.append(
             "<tr>"
             f"<td class=\"stats-rank\">{i}</td>"
-            f"<td>{escape(str(tank_name))}</td>"
+            f"<td>{_safe_web_text(tank_name)}</td>"
             f"<td class=\"stats-count\">{int(count)}</td>"
             "</tr>"
         )
@@ -478,13 +559,13 @@ def _render_stats_tanks(rows: list[tuple[str, int]]) -> str:
 def _render_stats_time(rows: list[tuple[str, int]], label: str) -> str:
     out: list[str] = [
         "<table class=\"stats-table\">",
-        f"<thead><tr><th>{escape(label)}</th><th class=\"stats-count\">Submissions</th></tr></thead>",
+        f"<thead><tr><th>{_safe_web_text(label)}</th><th class=\"stats-count\">Submissions</th></tr></thead>",
         "<tbody>",
     ]
     for key, count in rows:
         out.append(
             "<tr>"
-            f"<td>{escape(str(key))}</td>"
+            f"<td>{_safe_web_text(key)}</td>"
             f"<td class=\"stats-count\">{int(count)}</td>"
             "</tr>"
         )
@@ -497,6 +578,8 @@ def _render_stats_time(rows: list[tuple[str, int]], label: str) -> str:
 def _build_script() -> str:
     return """
 (() => {
+  const dataNode = document.getElementById("tb-data");
+  const DATA = dataNode ? JSON.parse(dataNode.textContent || "{}") : {};
   const wrappers = Array.from(document.querySelectorAll(".table-wrap"));
   const buttons = Array.from(document.querySelectorAll("[data-view-btn]"));
   const actionButtons = Array.from(document.querySelectorAll("[data-bulk-action]"));
@@ -505,11 +588,78 @@ def _build_script() -> str:
   const playerSortButtons = Array.from(document.querySelectorAll("[data-player-sort-btn]"));
   const playerSearch = document.querySelector("[data-player-search]");
   const playerList = document.querySelector("[data-player-list]");
+  const filterTier = document.querySelector("[data-filter-tier]");
+  const filterType = document.querySelector("[data-filter-type]");
+  const filterReset = document.querySelector("[data-filter-reset]");
+  const changesTarget = document.querySelector("[data-recent-changes]");
   let current = "tank";
   let playerSortMode = "name-asc";
   let playerQuery = "";
+  let tierFilter = "";
+  let typeFilter = "";
 
   const normalize = (v) => (v || "").toLocaleLowerCase().trim();
+  const escapeHtml = (v) => String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+  const setUrlState = () => {
+    const url = new URL(window.location.href);
+    const setParam = (k, v) => {
+      if (v) url.searchParams.set(k, v);
+      else url.searchParams.delete(k);
+    };
+    setParam("view", current);
+    setParam("tier", tierFilter);
+    setParam("type", typeFilter);
+    history.replaceState({}, "", url.toString());
+  };
+
+  const applyFromUrl = () => {
+    const p = new URLSearchParams(window.location.search);
+    const view = p.get("view");
+    current = view === "player" || view === "stats" ? view : "tank";
+    tierFilter = (p.get("tier") || "").trim();
+    typeFilter = normalize(p.get("type"));
+  };
+
+  const populateFilters = () => {
+    const tiers = Array.isArray(DATA.tiers) ? DATA.tiers : [];
+    const types = Array.isArray(DATA.types) ? DATA.types : [];
+    if (filterTier) {
+      filterTier.innerHTML = "<option value=''>All tiers</option>" + tiers.map((t) => (
+        `<option value="${escapeHtml(t)}">Tier ${escapeHtml(t)}</option>`
+      )).join("");
+      filterTier.value = tierFilter;
+    }
+    if (filterType) {
+      const typeLabel = (t) => {
+        if (t === "td") return "Tank Destroyer";
+        return t ? (t[0].toUpperCase() + t.slice(1)) : "";
+      };
+      filterType.innerHTML = "<option value=''>All types</option>" + types.map((t) => (
+        `<option value="${escapeHtml(t)}">${escapeHtml(typeLabel(t))}</option>`
+      )).join("");
+      filterType.value = typeFilter;
+    }
+  };
+
+  const renderRecentChanges = () => {
+    if (!changesTarget) return;
+    const rows = Array.isArray(DATA.recent_changes) ? DATA.recent_changes : [];
+    if (!rows.length) {
+      changesTarget.innerHTML = "<p class='muted'>No recent score changes.</p>";
+      return;
+    }
+    changesTarget.innerHTML = "<table class='stats-table'><thead><tr><th>ID</th><th>Action</th><th>Tank</th><th>Player</th><th class='stats-score'>Score</th><th class='hide-sm'>When</th></tr></thead><tbody>" +
+      rows.slice(0, 10).map((r) => (
+        `<tr><td>#${escapeHtml(r.id)}</td><td>${escapeHtml(r.action)}</td><td>${escapeHtml(r.tank_name)}</td><td>${escapeHtml(r.player_name)}</td><td class='stats-score'>${escapeHtml(r.score_change)}</td><td class='hide-sm'>${escapeHtml(r.when)}</td></tr>`
+      )).join("") +
+      "</tbody></table>";
+  };
 
   const sortPlayerBlocks = () => {
     if (!playerList) return;
@@ -533,7 +683,35 @@ def _build_script() -> str:
     const blocks = Array.from(playerList.querySelectorAll(":scope > details.type-block"));
     blocks.forEach((block) => {
       const key = normalize(block.getAttribute("data-player-key") || "");
-      block.style.display = q && !key.includes(q) ? "none" : "";
+      const visible = (!q || key.includes(q));
+      block.style.display = visible ? "" : "none";
+    });
+  };
+
+  const filterTankBlocks = () => {
+    const tierCards = Array.from(document.querySelectorAll('[data-main-view="tank"] .tier-card'));
+    tierCards.forEach((tierCard) => {
+      const tierVal = tierCard.getAttribute("data-tier") || "";
+      const tierMatches = !tierFilter || tierVal === tierFilter;
+      const typeBlocks = Array.from(tierCard.querySelectorAll(":scope .type-block"));
+      let tierVisibleTypes = 0;
+      typeBlocks.forEach((typeBlock) => {
+        const typeVal = normalize(typeBlock.getAttribute("data-type") || "");
+        const typeMatches = !typeFilter || typeVal === typeFilter;
+        const rowPairs = Array.from(typeBlock.querySelectorAll(":scope tbody tr.data-row"));
+        let visibleRows = 0;
+        rowPairs.forEach((row) => {
+          const detail = row.nextElementSibling;
+          row.style.display = "";
+          if (detail && detail.classList.contains("row-detail")) detail.style.display = "none";
+          row.classList.remove("expanded");
+          visibleRows += 1;
+        });
+        const visible = tierMatches && typeMatches && visibleRows > 0;
+        typeBlock.style.display = visible ? "" : "none";
+        if (visible) tierVisibleTypes += 1;
+      });
+      tierCard.style.display = tierVisibleTypes > 0 ? "" : "none";
     });
   };
 
@@ -562,6 +740,7 @@ def _build_script() -> str:
     if (playerToolsWrap) {
       playerToolsWrap.style.display = view === "player" ? "inline-flex" : "none";
     }
+    setUrlState();
   };
 
   buttons.forEach((btn) => {
@@ -580,9 +759,36 @@ def _build_script() -> str:
     playerSearch.addEventListener("input", () => {
       playerQuery = playerSearch.value || "";
       filterPlayerBlocks();
+      setUrlState();
+    });
+  }
+  if (filterTier) {
+    filterTier.addEventListener("change", () => {
+      tierFilter = filterTier.value || "";
+      filterTankBlocks();
+      setUrlState();
+    });
+  }
+  if (filterType) {
+    filterType.addEventListener("change", () => {
+      typeFilter = normalize(filterType.value || "");
+      filterTankBlocks();
+      setUrlState();
+    });
+  }
+  if (filterReset) {
+    filterReset.addEventListener("click", () => {
+      tierFilter = "";
+      typeFilter = "";
+      if (filterTier) filterTier.value = "";
+      if (filterType) filterType.value = "";
+      filterTankBlocks();
+      setUrlState();
     });
   }
   applyPlayerView();
+  filterTankBlocks();
+  renderRecentChanges();
 
   const setAllDetails = (openState) => {
     const activePanel = document.querySelector(`[data-main-view="${current}"]`);
@@ -600,6 +806,26 @@ def _build_script() -> str:
     });
   });
 
+  document.addEventListener("click", (event) => {
+    const row = event.target && event.target.closest ? event.target.closest("tr[data-row-toggle]") : null;
+    if (!row) return;
+    const detail = row.nextElementSibling;
+    if (!detail || !detail.classList.contains("row-detail")) return;
+    const expanded = row.classList.toggle("expanded");
+    detail.style.display = expanded ? "table-row" : "none";
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const row = event.target && event.target.closest ? event.target.closest("tr[data-row-toggle]") : null;
+    if (!row) return;
+    event.preventDefault();
+    row.click();
+  });
+
+  applyFromUrl();
+  populateFilters();
+  filterPlayerBlocks();
+  filterTankBlocks();
   update(current);
 })();
 """
@@ -617,13 +843,14 @@ def _render_html(
     unique_player_count: int,
     yearly_rows: list[tuple[str, int]],
     monthly_rows: list[tuple[str, int]],
+    data_blob: str,
 ) -> str:
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     banner = ""
     if banner_url:
-        safe_banner = escape(banner_url, quote=True)
+        safe_banner = _safe_web_text(banner_url, quote=True, fallback="")
         banner = (
-            f"<img src=\"{safe_banner}\" alt=\"{escape(clan_name)} banner\" />"
+            f"<img src=\"{safe_banner}\" alt=\"{_safe_web_text(clan_name)} banner\" />"
             "<div class=\"overlay\"></div>"
         )
     content = [
@@ -632,7 +859,7 @@ def _render_html(
         "<head>",
         "<meta charset=\"utf-8\" />",
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />",
-        f"<title>{escape(clan_name)} Leaderboard</title>",
+        f"<title>{_safe_web_text(clan_name)} Leaderboard</title>",
         "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">",
         "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>",
         "<link href=\"https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap\" rel=\"stylesheet\">",
@@ -643,8 +870,8 @@ def _render_html(
         "<section class=\"hero\">",
         banner if banner else "<div style=\"height: 220px\"></div>",
         "<div class=\"hero-content\">",
-        f"<h1>{escape(clan_name)}</h1>",
-        (f"<p class=\"meta\">{escape(clan_motto)}</p>" if clan_motto else ""),
+        f"<h1>{_safe_web_text(clan_name)}</h1>",
+        (f"<p class=\"meta\">{_safe_web_text(clan_motto)}</p>" if clan_motto else ""),
         "<p class=\"meta\">Static highscore board by Tier (main level) and Tank Type (sub level). Click headers to collapse.</p>",
         "</div>",
         "</section>",
@@ -659,6 +886,13 @@ def _render_html(
         "<div class=\"bulk-actions\" role=\"group\" aria-label=\"Expand and collapse\">",
         "<button type=\"button\" data-bulk-action=\"collapse\">Collapse All</button>",
         "<button type=\"button\" data-bulk-action=\"expand\">Expand All</button>",
+        "</div>",
+        "<div class=\"filter-tools\" role=\"group\" aria-label=\"Leaderboard filters\">",
+        "<label for=\"filter-tier\">Tier</label>",
+        "<select id=\"filter-tier\" data-filter-tier><option value=\"\">All tiers</option></select>",
+        "<label for=\"filter-type\">Type</label>",
+        "<select id=\"filter-type\" data-filter-type><option value=\"\">All types</option></select>",
+        "<button type=\"button\" data-filter-reset>Reset Filters</button>",
         "</div>",
         "<div class=\"player-tools\" data-player-tools-wrap>",
         "<div class=\"player-sort-chips\" role=\"group\" aria-label=\"Player sorting\">",
@@ -679,7 +913,7 @@ def _render_html(
         bucket_count = sum(len(rows) for rows in tier_block.values())
         content.extend(
             [
-                "<details class=\"tier-card\" open>",
+                f"<details class=\"tier-card\" data-tier=\"{int(tier)}\" open>",
                 "<summary class=\"tier-head\">",
                 f"<h2>Tier {tier}</h2>",
                 f"<span class=\"tier-count\">{bucket_count} tanks</span>",
@@ -688,15 +922,17 @@ def _render_html(
             ]
         )
         for ttype in sorted(tier_block.keys(), key=lambda v: TYPE_ORDER.get(v, 99)):
-            title = escape(utils.title_case_type(ttype))
+            title = _safe_web_text(utils.title_case_type(ttype))
             rows = tier_block[ttype]
             row_count = len(rows)
+            last_updated = _latest_created_at(rows)
+            last_updated_text = _safe_web_text(utils.fmt_utc(last_updated)) if last_updated else "—"
             content.extend(
                 [
-                    "<details class=\"type-block\" open>",
+                    f"<details class=\"type-block\" data-type=\"{_safe_web_text(ttype, quote=True)}\" open>",
                     "<summary class=\"type-head\">",
                     f"<div class=\"type-title\"><span class=\"badge\">{title}</span></div>",
-                    f"<span class=\"type-count\">{row_count} tanks</span>",
+                    f"<span class=\"type-count\">{row_count} tanks • Updated {last_updated_text}</span>",
                     "</summary>",
                     "<div class=\"table-wrap\">",
                     "<table>",
@@ -751,6 +987,10 @@ def _render_html(
             "<h3 class=\"stats-title\">Submissions Per Month</h3>",
             _render_stats_time(monthly_rows, "Month"),
             "</div>",
+            "<div class=\"stats-card\">",
+            "<h3 class=\"stats-title\">Recent Score Changes</h3>",
+            "<div data-recent-changes></div>",
+            "</div>",
             "</div>",
             "<div class=\"stats-card\" style=\"margin-top: 14px;\">",
             "<h3 class=\"stats-title\">Top 3 Per Tier (all tanks)</h3>",
@@ -765,9 +1005,10 @@ def _render_html(
     content.extend(
         [
             "<p class=\"footer\">",
-            f"Generated at {escape(now)} UTC • Tanks listed: {tank_total}",
+            f"Generated at {_safe_web_text(now)} UTC • Tanks listed: {tank_total}",
             "</p>",
             "</main>",
+            f"<script id=\"tb-data\" type=\"application/json\">{data_blob}</script>",
             f"<script>{_build_script()}</script>",
             "</body>",
             "</html>",
@@ -786,6 +1027,7 @@ async def generate_leaderboard_page() -> str | None:
     unique_player_count = await db.stats_unique_player_count()
     yearly_rows = await db.stats_submissions_by_year()
     monthly_rows = await db.stats_submissions_by_month()
+    recent_changes_rows = await db.score_changes(limit=10)
     grouped: dict[int, dict[str, list[dict]]] = defaultdict(dict)
     player_rows: list[dict] = []
     seen_buckets: set[tuple[int, str]] = set()
@@ -806,6 +1048,27 @@ async def generate_leaderboard_page() -> str | None:
                 }
             )
 
+    recent_changes: list[dict[str, str]] = []
+    for cid, action, _sid, tank_name, player_name, old_score, new_score, _actor, created_at, _details in recent_changes_rows:
+        old_text = _format_score(int(old_score)) if old_score is not None else "—"
+        new_text = _format_score(int(new_score)) if new_score is not None else "—"
+        recent_changes.append(
+            {
+                "id": int(cid),
+                "action": str(action),
+                "tank_name": str(tank_name),
+                "player_name": str(player_name),
+                "score_change": f"{old_text} -> {new_text}",
+                "when": utils.fmt_utc(str(created_at)),
+            }
+        )
+
+    data_payload = {
+        "tiers": sorted({int(t) for _n, t, _ty in tanks}, reverse=True),
+        "types": sorted({str(ty) for _n, _t, ty in tanks}, key=lambda v: TYPE_ORDER.get(v, 99)),
+        "recent_changes": recent_changes,
+    }
+
     html = _render_html(
         clan_name=config.WEB_CLAN_NAME,
         clan_motto=(config.WEB_CLAN_MOTTO or "").strip() or None,
@@ -818,6 +1081,7 @@ async def generate_leaderboard_page() -> str | None:
         unique_player_count=unique_player_count,
         yearly_rows=yearly_rows,
         monthly_rows=monthly_rows,
+        data_blob=_json_for_html(data_payload),
     )
     output_path = Path(config.WEB_OUTPUT_PATH)
     output_path.parent.mkdir(parents=True, exist_ok=True)
