@@ -11,6 +11,7 @@ ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID", "0"))
 AUDIT_LOG_CHANNEL_ID = int(os.getenv("AUDIT_LOG_CHANNEL_ID", "0"))
 
 COMMANDER_ROLE_NAME = os.getenv("COMMANDER_ROLE_NAME", "Clan Commander")
+COMMANDER_ROLE_ID = int(os.getenv("COMMANDER_ROLE_ID", "0"))
 MAX_SCORE = int(os.getenv("MAX_SCORE", "100000"))
 
 DB_PATH = os.getenv("DB_PATH", "highscores.db")

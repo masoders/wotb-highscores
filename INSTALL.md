@@ -28,6 +28,7 @@ ANNOUNCE_CHANNEL_ID=YOUR_ANNOUNCE_CHANNEL_ID
 BACKUP_CHANNEL_ID=YOUR_BACKUP_CHANNEL_ID
 
 COMMANDER_ROLE_NAME=Clan Commander
+COMMANDER_ROLE_ID=ROLE_ID
 MAX_SCORE=100000
 DB_PATH=highscores.db
 
@@ -43,6 +44,8 @@ BACKUP_ENCRYPTION_SALT=
 LOG_LEVEL=INFO
 LOG_PATH=tankbot.log
 ```
+
+`COMMANDER_ROLE_ID` takes precedence; `COMMANDER_ROLE_NAME` is used only when `COMMANDER_ROLE_ID=0`.
 
 ## 3) Install dependencies and start
 
@@ -92,4 +95,3 @@ Then verify backup flow:
 /backup run_now
 /backup verify_latest
 ```
-

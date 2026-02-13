@@ -23,7 +23,7 @@ def setup(tree: app_commands.CommandTree, *, guild: discord.abc.Snowflake | None
             lines.append("- `/highscore submit|edit|delete` — add or correct scores")
             lines.append("- `/highscore refresh_web` — regenerate static leaderboard webpage")
             lines.append("- /highscore import_scores — import historical scores from CSV")
-            lines.append("- `/tank add|edit|remove|list|export_csv` — roster updates and export")
+            lines.append("- `/tank add|edit|remove|list|export_csv|export_scores_csv` — roster updates and export")
             lines.append("- `/backup …` — backups and status")
             lines.append("")
 

@@ -7,6 +7,13 @@ _SNAPSHOT_MARKER = "_Snapshot page "
 _SNAPSHOT_MARKER_RE = re.compile(r"(?m)^_?Snapshot page \d+/\d+_?$")
 
 
+def _safe_text(value: object, *, fallback: str = "—") -> str:
+    raw = str(value) if value is not None else fallback
+    if not raw:
+        raw = fallback
+    return discord.utils.escape_markdown(discord.utils.escape_mentions(raw))
+
+
 def _split_into_pages(header_lines: list[str], table_lines: list[str], footer_lines: list[str], max_len: int = 1900) -> list[str]:
     """
     Builds multiple Discord-safe message pages.
@@ -83,12 +90,20 @@ async def upsert_bucket_thread(bot: discord.Client, tier: int, ttype: str):
     # CREATE
     if not thread_id:
         thread_name = f"Leaderboard — Tier {tier} / {utils.title_case_type(ttype)}"
-        thread = await forum.create_thread(name=thread_name, content=pages[0])
+        try:
+            thread = await forum.create_thread(
+                name=thread_name,
+                content=pages[0],
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except TypeError:
+            # Compatibility with discord.py variants that don't accept allowed_mentions here.
+            thread = await forum.create_thread(name=thread_name, content=pages[0])
         thread_obj = thread.thread if hasattr(thread, "thread") else thread
         await db.upsert_index_thread(tier, ttype, thread_obj.id, forum.id)
 
         for p in pages[1:]:
-            await thread_obj.send(p)
+            await thread_obj.send(p, allowed_mentions=discord.AllowedMentions.none())
         return
 
     # UPDATE EXISTING
@@ -213,9 +228,9 @@ async def _sync_snapshot_pages(
 
     starter = await _resolve_starter_message(thread)
     if starter is None:
-        starter = await thread.send(pages[0])
+        starter = await thread.send(pages[0], allowed_mentions=discord.AllowedMentions.none())
     elif starter.content != pages[0]:
-        await starter.edit(content=pages[0])
+        await starter.edit(content=pages[0], allowed_mentions=discord.AllowedMentions.none())
 
     if bot.user is None:
         return
@@ -234,7 +249,7 @@ async def _sync_snapshot_pages(
         new_content = desired_extra[idx]
         if msg.content != new_content:
             try:
-                await msg.edit(content=new_content)
+                await msg.edit(content=new_content, allowed_mentions=discord.AllowedMentions.none())
             except Exception:
                 pass
 
@@ -245,7 +260,7 @@ async def _sync_snapshot_pages(
             pass
 
     for content in desired_extra[keep_n:]:
-        await thread.send(content)
+        await thread.send(content, allowed_mentions=discord.AllowedMentions.none())
 
 def render_bucket_snapshot_pages(tier: int, type_: str, rows: list[dict]) -> list[str]:
     title = f"**{utils.title_case_type(type_)} — Tier {tier}**"
@@ -258,11 +273,14 @@ def render_bucket_snapshot_pages(tier: int, type_: str, rows: list[dict]) -> lis
 
     latest_line = "Latest: —"
     if latest:
-        latest_line = f"Latest: {latest['tank_name']}  {latest['score']}  {latest['player_name']}  {utils.fmt_utc(latest['created_at'])}"
+        latest_line = (
+            f"Latest: {_safe_text(latest.get('tank_name'))}  {latest['score']}  "
+            f"{_safe_text(latest.get('player_name'))}  {_safe_text(utils.fmt_utc(latest.get('created_at')))}"
+        )
 
     top_line = "Top:    —"
     if top:
-        top_line = f"Top:    {top['tank_name']}  {top['score']}  {top['player_name']}"
+        top_line = f"Top:    {_safe_text(top.get('tank_name'))}  {top['score']}  {_safe_text(top.get('player_name'))}"
 
     header_lines = [
         title,
@@ -275,15 +293,15 @@ def render_bucket_snapshot_pages(tier: int, type_: str, rows: list[dict]) -> lis
     table_rows: list[list[str]] = [table_header]
 
     for r in rows:
-        tank = r.get("tank_name") or "—"
+        tank = _safe_text(r.get("tank_name"))
         score = r.get("score")
-        player = r.get("player_name") or "—"
-        when = utils.fmt_utc(r["created_at"]) if r.get("created_at") else "—"
+        player = _safe_text(r.get("player_name"))
+        when = _safe_text(utils.fmt_utc(r["created_at"])) if r.get("created_at") else "—"
         table_rows.append([
-            str(tank),
+            tank,
             "—" if score is None else str(score),
-            str(player),
-            str(when),
+            player,
+            when,
         ])
 
     # Column widths: tune these if you want prettier
@@ -308,10 +326,11 @@ def render_bucket_snapshot(tier: int, type_: str, rows: list[dict]) -> str:
 
         latest_when = utils.fmt_utc(latest.get("created_at"))
         header_lines.append(
-            f"Latest: {latest['tank_name']}  {latest['score']}  {utils.clip(latest.get('player_name') or '—', 16)}  {latest_when}"
+            f"Latest: {_safe_text(latest.get('tank_name'))}  {latest['score']}  "
+            f"{_safe_text(utils.clip(latest.get('player_name') or '—', 16))}  {_safe_text(latest_when)}"
         )
         header_lines.append(
-            f"Top:    {top['tank_name']}  {top['score']}  {utils.clip(top.get('player_name') or '—', 16)}"
+            f"Top:    {_safe_text(top.get('tank_name'))}  {top['score']}  {_safe_text(utils.clip(top.get('player_name') or '—', 16))}"
         )
 
     # Build table rows (strings)
@@ -320,12 +339,12 @@ def render_bucket_snapshot(tier: int, type_: str, rows: list[dict]) -> str:
     table_rows.append(["-"*28, "-"*6, "-"*20, "-"*20])
 
     for r in rows:
-        tank = r["tank_name"]
+        tank = _safe_text(r["tank_name"])
         if r.get("score") is None:
             table_rows.append([tank, "—", "—", "—"])
         else:
-            when = utils.fmt_utc(r.get("created_at"))
-            player = utils.clip(r.get("player_name") or "—", 20)
+            when = _safe_text(utils.fmt_utc(r.get("created_at")))
+            player = _safe_text(utils.clip(r.get("player_name") or "—", 20))
             table_rows.append([tank, str(r["score"]), player, when])
 
     # Column widths (tweak to taste)

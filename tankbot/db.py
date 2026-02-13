@@ -879,6 +879,40 @@ async def get_best_for_tank(tank_name: str):
         """, (tank_name,))
         return await cur.fetchone()
 
+async def list_tanks_with_best_scores():
+    """
+    Return one row per tank with roster metadata and best score holder (if any).
+    Row format: (tank_name, score|None, player_name|None, tier, type)
+    """
+    sql = """
+    WITH ranked AS (
+        SELECT
+            s.tank_name,
+            s.score,
+            s.player_name_raw,
+            ROW_NUMBER() OVER (
+                PARTITION BY s.tank_name
+                ORDER BY s.score DESC, s.id ASC
+            ) AS rn
+        FROM submissions s
+    )
+    SELECT
+        t.name AS tank_name,
+        r.score AS score,
+        r.player_name_raw AS player_name,
+        t.tier AS tier,
+        t.type AS type
+    FROM tanks t
+    LEFT JOIN ranked r
+      ON r.tank_name = t.name AND r.rn = 1
+    ORDER BY t.tier ASC, t.type ASC, t.name ASC
+    """
+    async with _connect_db() as db:
+        cur = await db.execute(sql)
+        rows = await cur.fetchall()
+        await cur.close()
+        return rows
+
 async def get_champion():
     async with _connect_db() as db:
         cur = await db.execute("""

@@ -71,6 +71,8 @@ def title_case_type(t: str) -> str:
     }.get(t.lower(), t)
 
 def has_commander_role(member: discord.Member) -> bool:
+    if config.COMMANDER_ROLE_ID > 0:
+        return any(int(r.id) == config.COMMANDER_ROLE_ID for r in member.roles)
     return any(r.name == config.COMMANDER_ROLE_NAME for r in member.roles)
 
 def can_manage(member: discord.Member) -> bool:

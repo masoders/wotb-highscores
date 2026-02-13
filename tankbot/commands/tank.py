@@ -432,6 +432,30 @@ def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord
         data = out.getvalue().encode("utf-8")
         await interaction.response.send_message("CSV export:", ephemeral=True, file=discord.File(io.BytesIO(data), filename="tanks.csv"))
 
+    @grp.command(name="export_scores_csv", description="Export best score per tank as CSV (commanders only)")
+    async def export_scores_csv(interaction: discord.Interaction):
+        if not _require_commander(interaction):
+            await interaction.response.send_message("Nope. Only **Clan Commanders** can export tanks.", ephemeral=True)
+            return
+        rows = await db.list_tanks_with_best_scores()
+        out = io.StringIO()
+        w = csv.writer(out)
+        w.writerow(["tank", "score", "player", "tier", "type"])
+        for tank_name, score, player_name, tier, ttype in rows:
+            w.writerow([
+                tank_name,
+                ("" if score is None else score),
+                ("" if player_name is None else player_name),
+                tier,
+                ttype,
+            ])
+        data = out.getvalue().encode("utf-8")
+        await interaction.response.send_message(
+            "CSV export (best score per tank):",
+            ephemeral=True,
+            file=discord.File(io.BytesIO(data), filename="tank_scores.csv"),
+        )
+
     @grp.command(name="preview_import", description="Preview CSV import (no changes)")
     async def preview_import(interaction: discord.Interaction, csv_file: discord.Attachment, delete_missing: bool = False):
         if not _require_admin(interaction):
