@@ -15,21 +15,21 @@ def setup(tree: app_commands.CommandTree, *, guild: discord.abc.Snowflake | None
         lines.append("**Public commands:**")
         lines.append("- `/highscore show` — show current champion")
         lines.append("- `/highscore history` — recent results + stats")
-        lines.append("- `/highscore qualify` — check if a score would qualify")
+        lines.append("- `/highscore qualify` — check if damage would qualify")
         lines.append("")
 
         if is_commander:
             lines.append("**Commander commands:**")
-            lines.append("- `/highscore submit|edit|delete` — add or correct scores")
+            lines.append("- `/highscore submit|edit|delete` — add or correct damage")
             lines.append("- `/highscore refresh_web` — regenerate static leaderboard webpage")
             lines.append("- /highscore import_scores — import historical scores from CSV")
-            lines.append("- `/tank add|edit|remove|list|export_csv` — roster updates and export")
+            lines.append("- `/tank add|edit|remove|list|export_csv|export_scores_csv` — roster updates and export")
             lines.append("- `/backup …` — backups and status")
             lines.append("")
 
         if is_admin:
             lines.append("**Admin commands:**")
-            lines.append("- `/highscore changes` — score audit trail")
+            lines.append("- `/highscore changes` — damage audit trail")
             lines.append("- `/tank changes|preview_import|import_csv|rebuild_index...` — advanced tank admin")
             lines.append("- `/system health` — system health")
             lines.append("")

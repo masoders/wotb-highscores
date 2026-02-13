@@ -44,16 +44,16 @@ def _highscore_gate_message(tank_name: str, score: int, best: tuple | None) -> t
     bid, bplayer, bscore, _bcreated = best
     if score > bscore:
         return True, (
-            f"✅ Current #1 for **{tank_name}** is **{bscore}** by **{bplayer}** (#{bid}). "
+            f"✅ Current #1 damage for **{tank_name}** is **{bscore}** by **{bplayer}** (#{bid}). "
             f"This beats it by **+{score - bscore}**."
         )
     if score == bscore:
         return False, (
-            f"❌ Current #1 for **{tank_name}** is **{bscore}** by **{bplayer}** (#{bid}). "
+            f"❌ Current #1 damage for **{tank_name}** is **{bscore}** by **{bplayer}** (#{bid}). "
             "Ties do not qualify."
         )
     return False, (
-        f"❌ Current #1 for **{tank_name}** is **{bscore}** by **{bplayer}** (#{bid}). "
+        f"❌ Current #1 damage for **{tank_name}** is **{bscore}** by **{bplayer}** (#{bid}). "
         f"Short by **{bscore - score}**."
     )
 
@@ -328,14 +328,14 @@ async def import_scores(
     await interaction.followup.send("\n".join(msg_lines), ephemeral=True)
 
 @grp.command(name="submit", description="Submit a new highscore (commanders only)")
-@app_commands.describe(player="Player name", tank="Tank name", score="Score (1..100000)")
+@app_commands.describe(player="Player name", tank="Tank name", score="Damage (1..100000)")
 async def submit(interaction: discord.Interaction, player: str, tank: str, score: int):
     member = interaction.user
     if not isinstance(member, discord.Member) or not utils.has_commander_role(member):
         await interaction.response.send_message("Nope. Only **Clan Commanders** can submit.", ephemeral=True)
         return
     if not (1 <= score <= config.MAX_SCORE):
-        await interaction.response.send_message(f"Score must be between 1 and {config.MAX_SCORE}.", ephemeral=True)
+        await interaction.response.send_message(f"Damage must be between 1 and {config.MAX_SCORE}.", ephemeral=True)
         return
     t, tank_suggestions = await _resolve_tank_for_storage(tank)
     if not t:
@@ -365,7 +365,7 @@ async def submit(interaction: discord.Interaction, player: str, tank: str, score
 
     if outcome["status"] == "ignored":
         await interaction.followup.send(
-            f"❌ Not submitted. Existing score for **{player_raw}** on **{tank_name}** is higher or equal.",
+            f"❌ Not submitted. Existing damage for **{player_raw}** on **{tank_name}** is higher or equal.",
             ephemeral=True,
         )
         return
@@ -403,19 +403,19 @@ async def submit_tank_autocomplete(_interaction: discord.Interaction, current: s
     names = await db.list_tank_names(query=current, limit=25)
     return [app_commands.Choice(name=n, value=n) for n in names[:25]]
 
-@grp.command(name="edit", description="Edit an existing submission by id (score and optional player)")
+@grp.command(name="edit", description="Edit an existing submission by id (damage and optional player)")
 @app_commands.describe(
     submission_id="Submission id from history",
-    score="New score (1..100000)",
+    score="New damage (1..100000)",
     player="Optional new player name",
 )
 async def edit(interaction: discord.Interaction, submission_id: int, score: int, player: str | None = None):
     member = interaction.user
     if not isinstance(member, discord.Member) or not utils.has_commander_role(member):
-        await interaction.response.send_message("Nope. Only **Clan Commanders** can edit scores.", ephemeral=True)
+        await interaction.response.send_message("Nope. Only **Clan Commanders** can edit damage.", ephemeral=True)
         return
     if not (1 <= score <= config.MAX_SCORE):
-        await interaction.response.send_message(f"Score must be between 1 and {config.MAX_SCORE}.", ephemeral=True)
+        await interaction.response.send_message(f"Damage must be between 1 and {config.MAX_SCORE}.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
 
@@ -439,7 +439,7 @@ async def edit(interaction: discord.Interaction, submission_id: int, score: int,
         return
     if updated.get("error") == "duplicate_player_for_tank":
         await interaction.followup.send(
-            "❌ Could not edit submission: that tank already has a score for this player.",
+            "❌ Could not edit submission: that tank already has damage for this player.",
             ephemeral=True,
         )
         return
@@ -463,7 +463,7 @@ async def edit(interaction: discord.Interaction, submission_id: int, score: int,
         ),
     )
 
-    notice = await _refresh_webpage_notice(context="Score edit saved, but")
+    notice = await _refresh_webpage_notice(context="Damage edit saved, but")
     player_note = ""
     if updated["old_player_raw"] != updated["new_player_raw"]:
         player_note = (
@@ -486,12 +486,12 @@ async def edit(interaction: discord.Interaction, submission_id: int, score: int,
 @grp.command(name="delete", description="Revert or hard-delete a submission by id (commanders only)")
 @app_commands.describe(
     submission_id="Submission id from history",
-    hard_delete="True = permanently delete row, False = revert score (default)",
+    hard_delete="True = permanently delete row, False = revert damage (default)",
 )
 async def delete(interaction: discord.Interaction, submission_id: int, hard_delete: bool = False):
     member = interaction.user
     if not isinstance(member, discord.Member) or not utils.has_commander_role(member):
-        await interaction.response.send_message("Nope. Only **Clan Commanders** can delete scores.", ephemeral=True)
+        await interaction.response.send_message("Nope. Only **Clan Commanders** can delete damage entries.", ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=True)
@@ -523,11 +523,11 @@ async def delete(interaction: discord.Interaction, submission_id: int, hard_dele
         ),
     )
 
-    notice = await _refresh_webpage_notice(context="Score deletion saved, but")
+    notice = await _refresh_webpage_notice(context="Damage deletion saved, but")
     if hard_delete:
         msg = (
             f"✅ Hard-deleted submission **#{submission_id}** on **{deleted['tank_name']}** "
-            f"(old score **{deleted['old_score']}**).\n{notice}"
+            f"(old damage **{deleted['old_score']}**).\n{notice}"
         )
     else:
         msg = (
@@ -536,7 +536,7 @@ async def delete(interaction: discord.Interaction, submission_id: int, hard_dele
         )
     await interaction.followup.send(msg, ephemeral=True)
 
-@grp.command(name="changes", description="Show score audit trail (admin only)")
+@grp.command(name="changes", description="Show damage audit trail (admin only)")
 @app_commands.describe(limit="How many audit rows (1-50)")
 async def changes(interaction: discord.Interaction, limit: int = 20):
     member = interaction.user
@@ -545,9 +545,9 @@ async def changes(interaction: discord.Interaction, limit: int = 20):
         return
     rows = await db.score_changes(limit=limit)
     if not rows:
-        await interaction.response.send_message("No score changes logged.", ephemeral=True)
+        await interaction.response.send_message("No damage changes logged.", ephemeral=True)
         return
-    lines = ["**Score changes**"]
+    lines = ["**Damage changes**"]
     for _id, action, submission_id, tank_name, player_name, old_score, new_score, actor, created, details in rows:
         lines.append(
             f"- #{_id} **{action}** submission #{submission_id or '-'} "
@@ -581,14 +581,14 @@ async def show(interaction: discord.Interaction, tier: int | None = None, type: 
     cid, player, tank, score, submitted_by, created, ctier, ctype = champ
     label = "Global champion" if tier is None and type is None else "Champion"
     await interaction.response.send_message(
-        f"🏆 **{label}***{score}** — **{player}** ({tank}) • Tier {ctier} {utils.title_case_type(ctype)} • #{cid} • {created}Z",
+        f"🏆 **{label}** Damage **{score}** — **{player}** ({tank}) • Tier {ctier} {utils.title_case_type(ctype)} • #{cid} • {utils.fmt_utc(created)}",
         ephemeral=True)
 
-@grp.command(name="qualify", description="Check if a score would qualify as a new tank record (no submission)")
-@app_commands.describe(player="Player name (optional)", tank="Tank name", score="Score to compare")
+@grp.command(name="qualify", description="Check if damage would qualify as a new tank record (no submission)")
+@app_commands.describe(player="Player name (optional)", tank="Tank name", score="Damage to compare")
 async def qualify(interaction: discord.Interaction, tank: str, score: int, player: str | None = None):
     if not (1 <= score <= config.MAX_SCORE):
-        await interaction.response.send_message(f"Score must be between 1 and {config.MAX_SCORE}.", ephemeral=True)
+        await interaction.response.send_message(f"Damage must be between 1 and {config.MAX_SCORE}.", ephemeral=True)
         return
     t, tank_suggestions = await _resolve_tank_for_storage(tank)
     if not t:
@@ -610,7 +610,7 @@ async def qualify(interaction: discord.Interaction, tank: str, score: int, playe
     lines.append("**Qualification check**")
     lines.append(f"- Player: **{player}**")
     lines.append(f"- Tank: **{tank_name}** (Tier **{tier}**, **{utils.title_case_type(ttype)}**)")
-    lines.append(f"- Your score: **{score}**")
+    lines.append(f"- Your damage: **{score}**")
 
     _ok, msg = _highscore_gate_message(tank_name, score, best)
     lines.append(msg)
@@ -619,7 +619,7 @@ async def qualify(interaction: discord.Interaction, tank: str, score: int, playe
         _, cplayer, ctank, cscore, *_ = champ
         if score > cscore:
             lines.append("")
-            lines.append(f"🏆 Would also beat global champion (**{cscore}**, {ctank} by {cplayer}).")
+            lines.append(f"🏆 Would also beat global champion damage (**{cscore}**, {ctank} by {cplayer}).")
 
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
@@ -656,7 +656,7 @@ async def history(interaction: discord.Interaction, limit: int = 10):
             lines.append(f"**Tier {tier}**")
             for (_id, player, tank_name, score, submitted_by, created_at, _tier, _ttype) in grouped[ttype][tier]:
                 badge = "🏆 **TOP** " if champ_id is not None and _id == champ_id else ""
-                lines.append(f"{badge}**#{_id}** — **{score}** — **{player}** ({tank_name}) • {created_at}Z")
+                lines.append(f"{badge}**#{_id}** — **{score}** — **{player}** ({tank_name}) • {utils.fmt_utc(created_at)}")
             lines.append("")
 
     tops_tanks = await db.top_holders_by_tank(limit=5)

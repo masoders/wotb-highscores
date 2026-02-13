@@ -1,10 +1,11 @@
 import aiosqlite
 import difflib
+from contextlib import asynccontextmanager
 from . import config, utils
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tanks (
-    name TEXT NOT NULL,
+    name TEXT PRIMARY KEY,
     name_norm TEXT NOT NULL UNIQUE,
     tier INTEGER NOT NULL,
     type TEXT NOT NULL,
@@ -18,7 +19,10 @@ CREATE TABLE IF NOT EXISTS submissions (
     tank_name TEXT NOT NULL,
     score INTEGER NOT NULL,
     submitted_by TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (tank_name) REFERENCES tanks(name)
+      ON UPDATE CASCADE
+      ON DELETE RESTRICT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_submissions_player_tank
@@ -73,6 +77,12 @@ async def _apply_sqlite_pragmas(db: aiosqlite.Connection):
     await db.execute("PRAGMA busy_timeout = 5000;")
     await db.execute("PRAGMA journal_mode = WAL;")
     await db.execute("PRAGMA synchronous = NORMAL;")
+
+@asynccontextmanager
+async def _connect_db():
+    async with aiosqlite.connect(config.DB_PATH) as conn:
+        await _apply_sqlite_pragmas(conn)
+        yield conn
 
 async def _table_columns(db: aiosqlite.Connection, table_name: str) -> set[str]:
     cur = await db.execute(f"PRAGMA table_info({table_name})")
@@ -350,6 +360,116 @@ async def _migration_007_add_tank_aliases_table(db: aiosqlite.Connection):
         """
     )
 
+async def _migration_008_enforce_tank_integrity(db: aiosqlite.Connection):
+    # Ensure submissions point at canonical tank names before we add FK constraints.
+    cur = await db.execute(
+        """
+        SELECT DISTINCT s.tank_name
+        FROM submissions s
+        LEFT JOIN tanks t ON t.name = s.tank_name
+        WHERE t.name IS NULL
+        """
+    )
+    orphan_names = [str(r[0]) for r in await cur.fetchall() if r and r[0]]
+    await cur.close()
+    for orphan_name in orphan_names:
+        cur = await db.execute(
+            "SELECT name FROM tanks WHERE name_norm = ? LIMIT 1",
+            (utils.norm_tank_name(orphan_name),),
+        )
+        resolved = await cur.fetchone()
+        await cur.close()
+        if not resolved:
+            continue
+        canonical = str(resolved[0])
+        await db.execute(
+            "UPDATE submissions SET tank_name = ? WHERE tank_name = ?",
+            (canonical, orphan_name),
+        )
+
+    cur = await db.execute(
+        """
+        SELECT s.tank_name, COUNT(*)
+        FROM submissions s
+        LEFT JOIN tanks t ON t.name = s.tank_name
+        WHERE t.name IS NULL
+        GROUP BY s.tank_name
+        """
+    )
+    unresolved = await cur.fetchall()
+    await cur.close()
+    if unresolved:
+        sample = ", ".join([f"{n}({c})" for n, c in unresolved[:5]])
+        raise RuntimeError(
+            "Cannot enforce FK integrity; submissions reference missing tanks: " + sample
+        )
+
+    await db.execute("PRAGMA foreign_keys = OFF;")
+    try:
+        await db.execute("ALTER TABLE tanks RENAME TO tanks_old")
+        await db.execute("ALTER TABLE submissions RENAME TO submissions_old")
+
+        await db.execute(
+            """
+            CREATE TABLE tanks (
+                name TEXT PRIMARY KEY,
+                name_norm TEXT NOT NULL UNIQUE,
+                tier INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE submissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                player_name_raw TEXT NOT NULL,
+                player_name_norm TEXT NOT NULL,
+                tank_name TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                submitted_by TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (tank_name) REFERENCES tanks(name)
+                  ON UPDATE CASCADE
+                  ON DELETE RESTRICT
+            )
+            """
+        )
+        await db.execute(
+            """
+            INSERT INTO tanks (name, name_norm, tier, type, created_at)
+            SELECT name, name_norm, tier, type, created_at
+            FROM tanks_old
+            """
+        )
+        await db.execute(
+            """
+            INSERT INTO submissions (id, player_name_raw, player_name_norm, tank_name, score, submitted_by, created_at)
+            SELECT id, player_name_raw, player_name_norm, tank_name, score, submitted_by, created_at
+            FROM submissions_old
+            """
+        )
+        await db.execute("DROP TABLE submissions_old")
+        await db.execute("DROP TABLE tanks_old")
+
+        # Recreate required indexes after table rebuild.
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_submissions_player_tank "
+            "ON submissions (tank_name, player_name_norm)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_submissions_tank_score_id "
+            "ON submissions (tank_name, score DESC, id ASC)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tanks_tier_type_name "
+            "ON tanks (tier, type, name)"
+        )
+        await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tanks_name_norm ON tanks(name_norm)")
+    finally:
+        await db.execute("PRAGMA foreign_keys = ON;")
+
 async def _run_migrations(db: aiosqlite.Connection):
     migrations = [
         (1, _migration_001_cleanup_submission_indexes),
@@ -359,6 +479,7 @@ async def _run_migrations(db: aiosqlite.Connection):
         (5, _migration_005_backfill_player_name_norm),
         (6, _migration_006_canonicalize_player_display_names),
         (7, _migration_007_add_tank_aliases_table),
+        (8, _migration_008_enforce_tank_integrity),
     ]
     for version, fn in migrations:
         cur = await db.execute(
@@ -376,14 +497,13 @@ async def _run_migrations(db: aiosqlite.Connection):
         )
 
 async def init_db():
-    async with aiosqlite.connect(config.DB_PATH) as db:
-        await _apply_sqlite_pragmas(db)
+    async with _connect_db() as db:
         await db.executescript(SCHEMA)
         await _run_migrations(db)
         await db.commit()
 
 async def get_tank(name: str):
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute("SELECT name, tier, type FROM tanks WHERE name_norm = ?", (utils.norm_tank_name(name),))
         return await cur.fetchone()
 
@@ -400,14 +520,14 @@ async def list_tanks(tier: int | None = None, ttype: str | None = None):
     if wh:
         q += " WHERE " + " AND ".join(wh)
     q += " ORDER BY tier DESC, type, name"
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(q, tuple(args))
         return await cur.fetchall()
 
 async def list_tank_names(query: str = "", limit: int = 25) -> list[str]:
     q = (query or "").strip()
     limit = max(1, min(limit, 25))
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         if q:
             cur = await db.execute(
                 """
@@ -437,7 +557,7 @@ async def suggest_tank_names(tank_input: str, limit: int = 3) -> list[str]:
     candidate = (tank_input or "").strip()
     if not candidate:
         return []
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             """
             SELECT name
@@ -457,7 +577,7 @@ async def suggest_tank_names(tank_input: str, limit: int = 3) -> list[str]:
 
 async def upsert_tank_alias(alias_raw: str, tank_name: str, created_at: str):
     alias_norm = utils.norm_tank_name(alias_raw)
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         await db.execute(
             """
             INSERT INTO tank_aliases (alias_norm, alias_raw, tank_name, created_at)
@@ -473,7 +593,7 @@ async def upsert_tank_alias(alias_raw: str, tank_name: str, created_at: str):
 
 async def list_tank_aliases(limit: int = 200):
     limit = max(1, min(limit, 500))
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             """
             SELECT alias_raw, tank_name, created_at
@@ -527,7 +647,7 @@ async def get_player_name_canonical(player_input: str) -> str:
     player_norm = utils.normalize_player(player_input)
     if not player_norm:
         return player_input
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             """
             SELECT player_name_raw
@@ -546,7 +666,7 @@ async def suggest_player_names(player_input: str, limit: int = 3) -> list[str]:
     candidate = (player_input or "").strip()
     if not candidate:
         return []
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             """
             WITH ranked AS (
@@ -581,7 +701,7 @@ async def suggest_player_names(player_input: str, limit: int = 3) -> list[str]:
 async def list_player_names(query: str = "", limit: int = 25) -> list[str]:
     q = (query or "").strip()
     limit = max(1, min(limit, 25))
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         if q:
             cur = await db.execute(
                 """
@@ -633,7 +753,7 @@ async def list_player_names(query: str = "", limit: int = 25) -> list[str]:
     return [str(r[0]) for r in rows if r and r[0]]
 
 async def canonical_player_name_map() -> dict[str, str]:
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             """
             WITH ranked AS (
@@ -668,7 +788,7 @@ async def insert_submission(
     score: int,
     submitted_by: str,
     created_at: str):
-    async with aiosqlite.connect(config.DB_PATH) as conn:
+    async with _connect_db() as conn:
         cur = await conn.execute(
             """
             SELECT id, score, player_name_raw
@@ -749,7 +869,7 @@ async def insert_submission(
         }
 
 async def get_best_for_tank(tank_name: str):
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute("""
         SELECT id, player_name_raw, score, created_at
         FROM submissions
@@ -759,8 +879,42 @@ async def get_best_for_tank(tank_name: str):
         """, (tank_name,))
         return await cur.fetchone()
 
+async def list_tanks_with_best_scores():
+    """
+    Return one row per tank with roster metadata and best score holder (if any).
+    Row format: (tank_name, score|None, player_name|None, tier, type)
+    """
+    sql = """
+    WITH ranked AS (
+        SELECT
+            s.tank_name,
+            s.score,
+            s.player_name_raw,
+            ROW_NUMBER() OVER (
+                PARTITION BY s.tank_name
+                ORDER BY s.score DESC, s.id ASC
+            ) AS rn
+        FROM submissions s
+    )
+    SELECT
+        t.name AS tank_name,
+        r.score AS score,
+        r.player_name_raw AS player_name,
+        t.tier AS tier,
+        t.type AS type
+    FROM tanks t
+    LEFT JOIN ranked r
+      ON r.tank_name = t.name AND r.rn = 1
+    ORDER BY t.tier ASC, t.type ASC, t.name ASC
+    """
+    async with _connect_db() as db:
+        cur = await db.execute(sql)
+        rows = await cur.fetchall()
+        await cur.close()
+        return rows
+
 async def get_champion():
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute("""
         SELECT s.id, s.player_name_raw, s.tank_name, s.score,
                s.submitted_by, s.created_at, t.tier, t.type
@@ -772,7 +926,7 @@ async def get_champion():
         return await cur.fetchone()
 
 async def get_recent(limit: int):
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute("""
         SELECT s.id, s.player_name_raw, s.tank_name, s.score,
                s.submitted_by, s.created_at, t.tier, t.type
@@ -785,7 +939,7 @@ async def get_recent(limit: int):
 
 async def top_holders_by_tank(limit: int = 10):
     limit = max(1, min(limit, 25))
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute("""
         WITH ranked AS (
             SELECT
@@ -811,7 +965,7 @@ async def top_holders_by_tank(limit: int = 10):
 
 async def top_holders_by_tier_type(limit: int = 10):
     limit = max(1, min(limit, 25))
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute("""
         WITH ranked AS (
             SELECT
@@ -839,7 +993,7 @@ async def top_holders_by_tier_type(limit: int = 10):
 
 async def stats_top_per_tier(limit_per_tier: int = 3):
     limit_per_tier = max(1, min(limit_per_tier, 10))
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             """
             WITH ranked AS (
@@ -866,7 +1020,7 @@ async def stats_top_per_tier(limit_per_tier: int = 3):
 
 async def stats_most_recorded_tanks(limit: int = 10):
     limit = max(1, min(limit, 50))
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             """
             SELECT tank_name, COUNT(*) AS submissions_count
@@ -880,7 +1034,7 @@ async def stats_most_recorded_tanks(limit: int = 10):
         return await cur.fetchall()
 
 async def stats_unique_player_count() -> int:
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             "SELECT COUNT(DISTINCT player_name_norm) FROM submissions"
         )
@@ -889,7 +1043,7 @@ async def stats_unique_player_count() -> int:
         return int(row[0] if row and row[0] is not None else 0)
 
 async def stats_submissions_by_year():
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             """
             SELECT SUBSTR(created_at, 1, 4) AS year_key, COUNT(*) AS submissions_count
@@ -902,7 +1056,7 @@ async def stats_submissions_by_year():
         return await cur.fetchall()
 
 async def stats_submissions_by_month():
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             """
             SELECT SUBSTR(created_at, 1, 7) AS month_key, COUNT(*) AS submissions_count
@@ -915,7 +1069,7 @@ async def stats_submissions_by_month():
         return await cur.fetchall()
 
 async def counts():
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             """
             SELECT
@@ -931,14 +1085,14 @@ async def counts():
         return int(row[0]), int(row[1]), int(row[2])
 
 async def migration_version() -> int:
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
         row = await cur.fetchone()
         await cur.close()
         return int(row[0] if row and row[0] is not None else 0)
 
 async def log_tank_change(action: str, details: str, actor: str, created_at: str):
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         await db.execute(
             "INSERT INTO tank_changes (action, details, actor, created_at) VALUES (?,?,?,?)",
             (action, details, actor, created_at),
@@ -946,7 +1100,7 @@ async def log_tank_change(action: str, details: str, actor: str, created_at: str
         await db.commit()
 
 async def add_tank(name: str, tier: int, ttype: str, actor: str, created_at: str):
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         name_norm = utils.norm_tank_name(name)
         await db.execute(
             "INSERT INTO tanks (name, name_norm, tier, type, created_at) VALUES (?,?,?,?,?)",
@@ -975,7 +1129,7 @@ async def add_tanks_bulk(rows: list[tuple[str, int, str]], actor: str, created_a
             )
         )
 
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute("SELECT name_norm FROM tanks")
         existing = {str(r[0]) for r in await cur.fetchall()}
         await cur.close()
@@ -1007,24 +1161,79 @@ async def add_tanks_bulk(rows: list[tuple[str, int, str]], actor: str, created_a
     skipped = len(rows) - added
     return added, skipped
 
-async def edit_tank(name: str, tier: int, ttype: str, actor: str, created_at: str):
-    async with aiosqlite.connect(config.DB_PATH) as db:
-        await db.execute("UPDATE tanks SET tier = ?, type = ?, name = ? WHERE name_norm = ?",(tier, ttype, name, utils.norm_tank_name(name)),)
+async def edit_tank(
+    name: str,
+    tier: int,
+    ttype: str,
+    actor: str,
+    created_at: str,
+    new_name: str | None = None,
+):
+    existing = await get_tank(name)
+    if not existing:
+        raise ValueError("Tank not found.")
+    old_name = str(existing[0])
+    old_name_norm = utils.norm_tank_name(old_name)
+    final_name = str(new_name or old_name).strip()
+    final_name_norm = utils.norm_tank_name(final_name)
+
+    async with _connect_db() as db:
+        if final_name_norm != old_name_norm:
+            cur = await db.execute(
+                "SELECT name FROM tanks WHERE name_norm = ? LIMIT 1",
+                (final_name_norm,),
+            )
+            conflict = await cur.fetchone()
+            await cur.close()
+            if conflict:
+                raise ValueError("Another tank already exists with that name.")
+
+        await db.execute(
+            """
+            UPDATE tanks
+            SET tier = ?, type = ?, name = ?, name_norm = ?
+            WHERE name_norm = ?
+            """,
+            (tier, ttype, final_name, final_name_norm, old_name_norm),
+        )
+        if final_name_norm != old_name_norm:
+            await db.execute(
+                """
+                INSERT INTO tank_aliases (alias_norm, alias_raw, tank_name, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(alias_norm) DO UPDATE SET
+                  alias_raw = excluded.alias_raw,
+                  tank_name = excluded.tank_name,
+                  created_at = excluded.created_at
+                """,
+                (old_name_norm, old_name, final_name, created_at),
+            )
+            await db.execute(
+                "UPDATE tank_aliases SET tank_name = ? WHERE tank_name = ?",
+                (final_name, old_name),
+            )
         await db.commit()
-    await log_tank_change("edit", f"{name}|tier={tier}|type={ttype}", actor, created_at)
+    await log_tank_change(
+        "edit",
+        f"{old_name}->{final_name}|tier={tier}|type={ttype}",
+        actor,
+        created_at,
+    )
 
 async def tank_has_submissions(name: str) -> bool:
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute("SELECT 1 FROM submissions WHERE tank_name = ? LIMIT 1", (name,))
         return (await cur.fetchone()) is not None
 
 async def remove_tank(name: str, actor: str, created_at: str):
-    if await tank_has_submissions(name):
+    existing = await get_tank(name)
+    canonical_name = str(existing[0]) if existing else str(name)
+    if await tank_has_submissions(canonical_name):
         raise ValueError("Tank has submissions and cannot be removed.")
-    async with aiosqlite.connect(config.DB_PATH) as db:
-        await db.execute("DELETE FROM tanks WHERE name_norm = ?", (utils.norm_tank_name(name),))
+    async with _connect_db() as db:
+        await db.execute("DELETE FROM tanks WHERE name_norm = ?", (utils.norm_tank_name(canonical_name),))
         await db.commit()
-    await log_tank_change("remove", f"{name}", actor, created_at)
+    await log_tank_change("remove", canonical_name, actor, created_at)
 
 async def merge_tank_into(
     source_name: str,
@@ -1056,7 +1265,7 @@ async def merge_tank_into(
     deleted = 0
     upgraded = 0
 
-    async with aiosqlite.connect(config.DB_PATH) as conn:
+    async with _connect_db() as conn:
         cur = await conn.execute(
             """
             SELECT id, player_name_raw, player_name_norm, score, submitted_by, created_at
@@ -1189,7 +1398,7 @@ async def merge_tank_into(
 
 async def tank_changes(limit: int = 25):
     limit = max(1, min(limit, 50))
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             "SELECT id, action, details, actor, created_at FROM tank_changes ORDER BY id DESC LIMIT ?",
             (limit,),
@@ -1215,7 +1424,7 @@ async def get_champion_filtered(tier: int | None = None, ttype: str | None = Non
     if wh:
         q += " WHERE " + " AND ".join(wh)
     q += " ORDER BY s.score DESC, s.id ASC LIMIT 1;"
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(q, tuple(args))
         return await cur.fetchone()
 
@@ -1243,7 +1452,7 @@ async def best_per_tank_for_bucket(tier: int, type_: str):
     WHERE t.tier = ? AND t.type = ?
     ORDER BY (r.score IS NULL) ASC, r.score DESC, t.name ASC
     """
-    async with aiosqlite.connect(config.DB_PATH) as conn:
+    async with _connect_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(sql, (tier, type_))
         rows = await cur.fetchall()
@@ -1257,7 +1466,7 @@ async def get_bucket_snapshot_rows(tier: int, ttype: str):
 
 async def get_index_thread_id(tier: int, type_: str) -> int | None:
     sql = "SELECT thread_id FROM tank_index_posts WHERE tier = ? AND type = ?"
-    async with aiosqlite.connect(config.DB_PATH) as conn:
+    async with _connect_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(sql, (tier, type_))
         row = await cur.fetchone()
@@ -1275,18 +1484,18 @@ async def upsert_index_thread(tier: int, type_: str, thread_id: int, forum_chann
       thread_id = excluded.thread_id,
       forum_channel_id = excluded.forum_channel_id
     """
-    async with aiosqlite.connect(config.DB_PATH) as conn:
+    async with _connect_db() as conn:
         await conn.execute(sql, (tier, type_, int(thread_id), int(forum_channel_id)))
         await conn.commit()
 
 async def clear_index_threads():
-    async with aiosqlite.connect(config.DB_PATH) as conn:
+    async with _connect_db() as conn:
         await conn.execute("DELETE FROM tank_index_posts")
         await conn.commit()
 
 async def list_tier_type_buckets():
     sql = "SELECT DISTINCT tier, type FROM tanks ORDER BY tier DESC, type ASC"
-    async with aiosqlite.connect(config.DB_PATH) as conn:
+    async with _connect_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(sql)
         rows = await cur.fetchall()
@@ -1295,7 +1504,7 @@ async def list_tier_type_buckets():
 
 async def list_index_mappings() -> set[tuple[int, str]]:
     sql = "SELECT tier, type FROM tank_index_posts"
-    async with aiosqlite.connect(config.DB_PATH) as conn:
+    async with _connect_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(sql)
         rows = await cur.fetchall()
@@ -1306,7 +1515,7 @@ async def get_tank_canonical(tank_input: str):
     """Return (canonical_name, tier, type) for any user-entered tank name (case-insensitive)."""
     tank_norm = utils.norm_tank_name(tank_input)
     sql = "SELECT name, tier, type FROM tanks WHERE name_norm = ?"
-    async with aiosqlite.connect(config.DB_PATH) as conn:
+    async with _connect_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(sql, (tank_norm,))
         row = await cur.fetchone()
@@ -1333,7 +1542,7 @@ async def get_tank_canonical(tank_input: str):
 
 
 async def get_submission_by_id(submission_id: int):
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             """
             SELECT id, player_name_raw, player_name_norm, tank_name, score, submitted_by, created_at
@@ -1355,7 +1564,7 @@ async def edit_submission_score(
     new_player_raw: str | None = None,
     new_player_norm: str | None = None,
 ):
-    async with aiosqlite.connect(config.DB_PATH) as conn:
+    async with _connect_db() as conn:
         cur = await conn.execute(
             """
             SELECT id, player_name_raw, player_name_norm, tank_name, score
@@ -1417,7 +1626,7 @@ async def edit_submission_score(
     }
 
 async def delete_submission(submission_id: int, actor: str, created_at: str, hard_delete: bool = False):
-    async with aiosqlite.connect(config.DB_PATH) as conn:
+    async with _connect_db() as conn:
         cur = await conn.execute(
             """
             SELECT id, player_name_raw, player_name_norm, tank_name, score
@@ -1494,7 +1703,7 @@ async def delete_submission(submission_id: int, actor: str, created_at: str, har
 
 async def score_changes(limit: int = 25):
     limit = max(1, min(limit, 100))
-    async with aiosqlite.connect(config.DB_PATH) as db:
+    async with _connect_db() as db:
         cur = await db.execute(
             """
             SELECT id, action, submission_id, tank_name, player_name_raw, old_score, new_score, actor, created_at, details
@@ -1517,7 +1726,7 @@ async def insert_submissions_bulk(rows):
     added = 0
     updated = 0
     ignored = 0
-    async with aiosqlite.connect(config.DB_PATH) as conn:
+    async with _connect_db() as conn:
         for player_raw, player_norm, tank_name, score, submitted_by, created_at in rows:
             cur = await conn.execute(
                 """

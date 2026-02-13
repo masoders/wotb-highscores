@@ -27,10 +27,11 @@ pip install -r requirements.txt
 
 ## 3. Configure (2 minutes)
 Create `.env` using `SETUP.md` template.
+`COMMANDER_ROLE_ID` takes precedence; `COMMANDER_ROLE_NAME` is used only when the ID is `0`.
 Minimum required:
 - DISCORD_TOKEN
 - GUILD_ID
-- CLAN_COMMANDER_ROLE_ID
+- COMMANDER_ROLE_ID
 - ANNOUNCE_CHANNEL_ID
 - BACKUP_CHANNEL_ID
 - TANK_INDEX_FORUM_CHANNEL_ID

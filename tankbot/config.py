@@ -11,6 +11,7 @@ ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID", "0"))
 AUDIT_LOG_CHANNEL_ID = int(os.getenv("AUDIT_LOG_CHANNEL_ID", "0"))
 
 COMMANDER_ROLE_NAME = os.getenv("COMMANDER_ROLE_NAME", "Clan Commander")
+COMMANDER_ROLE_ID = int(os.getenv("COMMANDER_ROLE_ID", "0"))
 MAX_SCORE = int(os.getenv("MAX_SCORE", "100000"))
 
 DB_PATH = os.getenv("DB_PATH", "highscores.db")
@@ -42,3 +43,9 @@ WEB_OUTPUT_PATH = os.getenv("WEB_OUTPUT_PATH", "web/leaderboard.html")
 WEB_CLAN_NAME = os.getenv("WEB_CLAN_NAME", "Tank Highscore Clan")
 WEB_CLAN_MOTTO = os.getenv("WEB_CLAN_MOTTO", "")
 WEB_BANNER_URL = os.getenv("WEB_BANNER_URL", "")
+_web_clan_name_case = os.getenv("WEB_CLAN_NAME_CASE", "normal").strip().lower()
+WEB_CLAN_NAME_CASE = _web_clan_name_case if _web_clan_name_case in {"normal", "uppercase"} else "normal"
+_web_clan_name_align = os.getenv("WEB_CLAN_NAME_ALIGN", "center").strip().lower()
+WEB_CLAN_NAME_ALIGN = _web_clan_name_align if _web_clan_name_align in {"center", "left"} else "center"
+_web_font_mode = os.getenv("WEB_FONT_MODE", "sans").strip().lower()
+WEB_FONT_MODE = _web_font_mode if _web_font_mode in {"sans", "monospace"} else "sans"

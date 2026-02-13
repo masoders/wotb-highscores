@@ -58,9 +58,14 @@ def fmt_utc(iso: str | None) -> str:
     try:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     except Exception:
-        return iso  # fallback: show raw if parsing fails
+        # fallback: keep a readable timestamp but strip timezone markers
+        raw = str(iso).strip()
+        raw = re.sub(r"(?<=\d)T(?=\d)", " ", raw)
+        raw = re.sub(r"\s*UTC\b", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"(?:\+00:00|Z)\b", "", raw)
+        return raw.strip() or "—"
     dt = dt.astimezone(timezone.utc)
-    return dt.strftime("%Y-%m-%d %H:%M UTC")
+    return dt.strftime("%Y-%m-%d %H:%M")
 
 def title_case_type(t: str) -> str:
     return {
@@ -71,6 +76,8 @@ def title_case_type(t: str) -> str:
     }.get(t.lower(), t)
 
 def has_commander_role(member: discord.Member) -> bool:
+    if config.COMMANDER_ROLE_ID > 0:
+        return any(int(r.id) == config.COMMANDER_ROLE_ID for r in member.roles)
     return any(r.name == config.COMMANDER_ROLE_NAME for r in member.roles)
 
 def can_manage(member: discord.Member) -> bool:

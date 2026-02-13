@@ -42,11 +42,14 @@ GUILD_ID=YOUR_GUILD_ID
 ANNOUNCE_CHANNEL_ID=CHANNEL_FOR_CHAMPION_ANNOUNCEMENTS
 AUDIT_LOG_CHANNEL_ID=PRIVATE_LOG_CHANNEL_ID
 TANK_INDEX_FORUM_CHANNEL_ID=FORUM_CHANNEL_ID
+COMMANDER_ROLE_ID=ROLE_ID
 COMMANDER_ROLE_NAME=Clan Commander
 MAX_SCORE=100000
 DB_PATH=highscores.db
 TANKS_SEED_CSV_PATH=tanks.csv
 ```
+
+`COMMANDER_ROLE_ID` takes precedence; `COMMANDER_ROLE_NAME` is used only when `COMMANDER_ROLE_ID=0`.
 
 ## First run seeding (CSV seed-only)
 If `tanks` table is empty, the bot will seed tanks from `tanks.csv` (header: name,tier,type).
