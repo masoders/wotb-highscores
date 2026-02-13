@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -49,3 +50,20 @@ _web_clan_name_align = os.getenv("WEB_CLAN_NAME_ALIGN", "center").strip().lower(
 WEB_CLAN_NAME_ALIGN = _web_clan_name_align if _web_clan_name_align in {"center", "left"} else "center"
 _web_font_mode = os.getenv("WEB_FONT_MODE", "sans").strip().lower()
 WEB_FONT_MODE = _web_font_mode if _web_font_mode in {"sans", "monospace"} else "sans"
+
+
+def _web_hex_color(key: str, default: str) -> str:
+    value = os.getenv(key, default).strip()
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        return value
+    return default
+
+
+WEB_BG_COLOR = _web_hex_color("WEB_BG_COLOR", "#0b1221")
+WEB_FONT_COLOR = _web_hex_color("WEB_FONT_COLOR", "#ecf1ff")
+WEB_DAMAGE_COLOR = _web_hex_color("WEB_DAMAGE_COLOR", "#6ef0b6")
+WEB_TANK_NAME_COLOR = _web_hex_color("WEB_TANK_NAME_COLOR", "#ecf1ff")
+WEB_PLAYER_NAME_COLOR = _web_hex_color("WEB_PLAYER_NAME_COLOR", "#ecf1ff")
+WEB_CLAN_NAME_COLOR = _web_hex_color("WEB_CLAN_NAME_COLOR", "#ecf1ff")
+WEB_MOTTO_COLOR = _web_hex_color("WEB_MOTTO_COLOR", "#adc0ea")
+WEB_LEADERBOARD_COLOR = _web_hex_color("WEB_LEADERBOARD_COLOR", "#f1f6ff")

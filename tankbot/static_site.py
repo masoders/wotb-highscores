@@ -35,7 +35,7 @@ def _sorted_snapshot_rows(rows: list[dict]) -> list[dict]:
     return sorted(rows, key=lambda r: str(r.get("tank_name") or "").casefold())
 
 
-def _build_styles(font_family: str) -> str:
+def _build_styles(font_family: str, theme: dict[str, str]) -> str:
     styles = """
 :root {
   --bg-0: #0b1221;
@@ -47,6 +47,13 @@ def _build_styles(font_family: str) -> str:
   --accent: #6ee7ff;
   --accent-2: #3aa5ff;
   --good: #6ef0b6;
+  --font-color: __FONT_COLOR__;
+  --damage-color: __DAMAGE_COLOR__;
+  --tank-name-color: __TANK_NAME_COLOR__;
+  --player-name-color: __PLAYER_NAME_COLOR__;
+  --clan-name-color: __CLAN_NAME_COLOR__;
+  --motto-color: __MOTTO_COLOR__;
+  --leaderboard-color: __LEADERBOARD_COLOR__;
 }
 *, *::before, *::after {
   box-sizing: border-box;
@@ -54,12 +61,12 @@ def _build_styles(font_family: str) -> str:
 }
 body {
   margin: 0;
-  color: var(--text);
+  color: var(--font-color);
   font-family: __FONT_FAMILY__;
   background:
     radial-gradient(circle at 0% 0%, #1f2f53 0%, transparent 45%),
     radial-gradient(circle at 100% 100%, #123a67 0%, transparent 40%),
-    linear-gradient(180deg, var(--bg-0), var(--bg-1));
+    linear-gradient(180deg, __BG_COLOR__, var(--bg-1));
   min-height: 100vh;
 }
 .wrap {
@@ -112,16 +119,17 @@ h1 {
   margin: 0 0 6px;
   font-size: clamp(1.5rem, 4vw, 2.6rem);
   letter-spacing: 0.02em;
+  color: var(--clan-name-color);
 }
 .meta {
   margin: 0;
-  color: var(--muted);
+  color: var(--motto-color);
   font-size: 0.96rem;
 }
 .section-title {
   margin: 34px 0 16px;
   font-size: 1.45rem;
-  color: #f1f6ff;
+  color: var(--leaderboard-color);
 }
 .view-controls {
   display: flex;
@@ -380,9 +388,11 @@ tbody tr:hover { background: #253a5a66; }
 .data-row.expanded + .row-detail { display: table-row; }
 .score {
   font-weight: 700;
-  color: var(--good);
+  color: var(--damage-color);
 }
 .muted { color: var(--muted); }
+.tank-name { color: var(--tank-name-color); }
+.player-name { color: var(--player-name-color); }
 .badge {
   display: inline-block;
   padding: 3px 8px;
@@ -440,7 +450,16 @@ tbody tr:hover { background: #253a5a66; }
   .stats-grid { grid-template-columns: 1fr; }
 }
 """
-    return styles.replace("__FONT_FAMILY__", font_family)
+    themed = styles.replace("__FONT_FAMILY__", font_family)
+    themed = themed.replace("__BG_COLOR__", theme["bg_color"])
+    themed = themed.replace("__FONT_COLOR__", theme["font_color"])
+    themed = themed.replace("__DAMAGE_COLOR__", theme["damage_color"])
+    themed = themed.replace("__TANK_NAME_COLOR__", theme["tank_name_color"])
+    themed = themed.replace("__PLAYER_NAME_COLOR__", theme["player_name_color"])
+    themed = themed.replace("__CLAN_NAME_COLOR__", theme["clan_name_color"])
+    themed = themed.replace("__MOTTO_COLOR__", theme["motto_color"])
+    themed = themed.replace("__LEADERBOARD_COLOR__", theme["leaderboard_color"])
+    return themed
 
 
 def _format_score(score: int | None) -> str:
@@ -464,9 +483,9 @@ def _render_rows(rows: list[dict]) -> str:
         player_key = _safe_web_text(player_raw.casefold(), quote=True)
         out.append(
             f"<tr class=\"data-row\" data-row-toggle=\"1\" data-player-key=\"{player_key}\" tabindex=\"0\">"
-            f"<td data-label=\"Tank\">{tank}</td>"
+            f"<td class=\"tank-name\" data-label=\"Tank\">{tank}</td>"
             f"<td class=\"score\" data-label=\"Damage\">{score_text}</td>"
-            f"<td data-label=\"Player\">{player}</td>"
+            f"<td class=\"player-name\" data-label=\"Player\">{player}</td>"
             f"<td class=\"hide-sm muted\" data-label=\"Updated\">{when}</td>"
             "</tr>"
             "<tr class=\"row-detail\">"
@@ -502,7 +521,7 @@ def _render_player_rows(rows: list[dict]) -> str:
         score_text = _safe_web_text(_format_score(score if isinstance(score, int) else None), fallback="-")
         out.append(
             "<tr class=\"data-row\" data-row-toggle=\"1\" tabindex=\"0\">"
-            f"<td data-label=\"Tank\">{tank}</td>"
+            f"<td class=\"tank-name\" data-label=\"Tank\">{tank}</td>"
             f"<td data-label=\"Type\">{ttype}</td>"
             f"<td data-label=\"Tier\">{tier}</td>"
             f"<td class=\"score\" data-label=\"Damage\">{score_text}</td>"
@@ -574,8 +593,8 @@ def _render_stats_top_per_tier(rows: list[tuple[int, int, str, str, int]]) -> st
                 "<tr>"
                 f"<td class=\"stats-rank\">{rank}</td>"
                 f"<td class=\"stats-score\">{_safe_web_text(_format_score(score), fallback='-')}</td>"
-                f"<td>{_safe_web_text(player_name)}</td>"
-                f"<td>{_safe_web_text(tank_name)}</td>"
+                f"<td class=\"player-name\">{_safe_web_text(player_name)}</td>"
+                f"<td class=\"tank-name\">{_safe_web_text(tank_name)}</td>"
                 "</tr>"
             )
         out.extend(["</tbody>", "</table>", "</div>", "</details>"])
@@ -594,7 +613,7 @@ def _render_stats_tanks(rows: list[tuple[str, int]]) -> str:
         out.append(
             "<tr>"
             f"<td class=\"stats-rank\">{i}</td>"
-            f"<td>{_safe_web_text(tank_name)}</td>"
+            f"<td class=\"tank-name\">{_safe_web_text(tank_name)}</td>"
             f"<td class=\"stats-count\">{int(count)}</td>"
             "</tr>"
         )
@@ -885,6 +904,7 @@ def _render_html(
     banner_url: str | None,
     clan_name_align: str,
     font_family: str,
+    theme: dict[str, str],
     grouped: dict[int, dict[str, list[dict]]],
     player_rows: list[dict],
     tank_total: int,
@@ -917,7 +937,7 @@ def _render_html(
         "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">",
         "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>",
         "<link href=\"https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap\" rel=\"stylesheet\">",
-        f"<style>{_build_styles(font_family)}</style>",
+        f"<style>{_build_styles(font_family, theme)}</style>",
         "</head>",
         "<body>",
         "<main class=\"wrap\">",
@@ -1139,6 +1159,16 @@ async def generate_leaderboard_page() -> str | None:
         banner_url=config.WEB_BANNER_URL or None,
         clan_name_align=config.WEB_CLAN_NAME_ALIGN,
         font_family=font_family,
+        theme={
+            "bg_color": config.WEB_BG_COLOR,
+            "font_color": config.WEB_FONT_COLOR,
+            "damage_color": config.WEB_DAMAGE_COLOR,
+            "tank_name_color": config.WEB_TANK_NAME_COLOR,
+            "player_name_color": config.WEB_PLAYER_NAME_COLOR,
+            "clan_name_color": config.WEB_CLAN_NAME_COLOR,
+            "motto_color": config.WEB_MOTTO_COLOR,
+            "leaderboard_color": config.WEB_LEADERBOARD_COLOR,
+        },
         grouped=grouped,
         player_rows=player_rows,
         tank_total=len(tanks),
