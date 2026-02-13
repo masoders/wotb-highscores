@@ -17,7 +17,7 @@ from discord.ext import tasks
 from . import config, db
 
 log = logging.getLogger(__name__)
-from .utils import utc_now_z
+from .utils import fmt_utc, utc_now_z
 
 _last_backup_utc: str | None = None
 _last_backup_ok: bool | None = None
@@ -162,7 +162,7 @@ async def weekly_backup_loop(bot: discord.Client):
             f"🧰 **Weekly DB backup**\n"
             f"- File: `{fname}`\n"
             f"- SHA-256: `{sha_hex}`\n"
-            f"- Created (UTC): `{utc_now_z()}`"
+            f"- Created: `{fmt_utc(utc_now_z())}`"
         )
         if note:
             msg += f"\n- {note}"
@@ -206,7 +206,7 @@ async def run_backup_now(bot: discord.Client) -> tuple[bool, str]:
             f"🧰 **Manual DB backup**\n"
             f"- File: `{fname}`\n"
             f"- SHA-256: `{sha_hex}`\n"
-            f"- Created (UTC): `{utc_now_z()}`"
+            f"- Created: `{fmt_utc(utc_now_z())}`"
         )
         if note:
             msg += f"\n- {note}"

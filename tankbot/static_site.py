@@ -35,8 +35,8 @@ def _sorted_snapshot_rows(rows: list[dict]) -> list[dict]:
     return sorted(rows, key=lambda r: str(r.get("tank_name") or "").casefold())
 
 
-def _build_styles() -> str:
-    return """
+def _build_styles(font_family: str) -> str:
+    styles = """
 :root {
   --bg-0: #0b1221;
   --bg-1: #131f37;
@@ -48,11 +48,14 @@ def _build_styles() -> str:
   --accent-2: #3aa5ff;
   --good: #6ef0b6;
 }
-* { box-sizing: border-box; }
+*, *::before, *::after {
+  box-sizing: border-box;
+  font-family: inherit;
+}
 body {
   margin: 0;
   color: var(--text);
-  font-family: "Plus Jakarta Sans", "Segoe UI", sans-serif;
+  font-family: __FONT_FAMILY__;
   background:
     radial-gradient(circle at 0% 0%, #1f2f53 0%, transparent 45%),
     radial-gradient(circle at 100% 100%, #123a67 0%, transparent 40%),
@@ -88,6 +91,22 @@ body {
   left: 24px;
   right: 24px;
   bottom: 18px;
+  text-align: center;
+}
+.hero.no-banner {
+  padding: 22px 24px;
+}
+.hero.no-banner .hero-content {
+  position: static;
+  left: auto;
+  right: auto;
+  bottom: auto;
+}
+.hero-content.left {
+  text-align: left;
+}
+.hero-content.center {
+  text-align: center;
 }
 h1 {
   margin: 0 0 6px;
@@ -106,10 +125,22 @@ h1 {
 }
 .view-controls {
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.view-row {
+  display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 14px;
   flex-wrap: wrap;
+}
+.view-row.top {
+  align-items: center;
+}
+.view-row.bottom {
+  align-items: flex-start;
 }
 .view-label {
   color: var(--muted);
@@ -155,10 +186,15 @@ h1 {
   border: 1px solid #446291;
   background: #162746;
   color: #d0defe;
-  border-radius: 8px;
-  padding: 6px 9px;
+  border-radius: 9px;
+  padding: 7px 10px;
+  min-height: 35px;
+  line-height: 1.2;
   font: inherit;
-  font-size: 0.84rem;
+  font-size: 0.85rem;
+}
+.filter-tools select {
+  appearance: none;
 }
 .filter-tools input {
   min-width: 170px;
@@ -167,11 +203,13 @@ h1 {
   border: 1px solid #446291;
   background: #162746;
   color: #d0defe;
-  border-radius: 8px;
-  padding: 6px 9px;
+  border-radius: 9px;
+  padding: 7px 10px;
+  min-height: 35px;
+  line-height: 1.2;
   cursor: pointer;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 0.85rem;
 }
 .player-tools {
   display: none;
@@ -322,6 +360,11 @@ th {
 .col-score { width: 16%; }
 .col-player { width: 20%; }
 .col-updated { width: 20%; }
+.col-p-tank { width: 40%; }
+.col-p-type { width: 18%; }
+.col-p-tier { width: 10%; }
+.col-p-score { width: 14%; }
+.col-p-updated { width: 18%; }
 .score-head, .score {
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -383,16 +426,21 @@ tbody tr:hover { background: #253a5a66; }
 .stats-rank, .stats-count, .stats-score { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 860px) {
   .hide-sm { display: none; }
-  .view-controls { align-items: flex-start; }
+  .view-row { align-items: flex-start; }
   .filter-tools { width: 100%; }
   .filter-tools input, .filter-tools select { width: 100%; }
   .col-tank { width: 58%; }
   .col-score { width: 22%; }
   .col-player { width: 20%; }
+  .col-p-tank { width: 52%; }
+  .col-p-type { width: 20%; }
+  .col-p-tier { width: 10%; }
+  .col-p-score { width: 18%; }
   th, td { padding: 11px 8px; }
   .stats-grid { grid-template-columns: 1fr; }
 }
 """
+    return styles.replace("__FONT_FAMILY__", font_family)
 
 
 def _format_score(score: int | None) -> str:
@@ -417,7 +465,7 @@ def _render_rows(rows: list[dict]) -> str:
         out.append(
             f"<tr class=\"data-row\" data-row-toggle=\"1\" data-player-key=\"{player_key}\" tabindex=\"0\">"
             f"<td data-label=\"Tank\">{tank}</td>"
-            f"<td class=\"score\" data-label=\"Best Score\">{score_text}</td>"
+            f"<td class=\"score\" data-label=\"Damage\">{score_text}</td>"
             f"<td data-label=\"Player\">{player}</td>"
             f"<td class=\"hide-sm muted\" data-label=\"Updated\">{when}</td>"
             "</tr>"
@@ -457,7 +505,7 @@ def _render_player_rows(rows: list[dict]) -> str:
             f"<td data-label=\"Tank\">{tank}</td>"
             f"<td data-label=\"Type\">{ttype}</td>"
             f"<td data-label=\"Tier\">{tier}</td>"
-            f"<td class=\"score\" data-label=\"Best Score\">{score_text}</td>"
+            f"<td class=\"score\" data-label=\"Damage\">{score_text}</td>"
             f"<td class=\"hide-sm muted\" data-label=\"Updated\">{when}</td>"
             "</tr>"
             "<tr class=\"row-detail\">"
@@ -485,13 +533,13 @@ def _render_player_blocks(rows: list[dict]) -> str:
                 "<div class=\"table-wrap\">",
                 "<table>",
                 "<colgroup>"
-                "<col class=\"col-tank\" />"
-                "<col class=\"col-type\" />"
-                "<col class=\"col-tier\" />"
-                "<col class=\"col-score\" />"
-                "<col class=\"col-updated\" />"
+                "<col class=\"col-p-tank\" />"
+                "<col class=\"col-p-type\" />"
+                "<col class=\"col-p-tier\" />"
+                "<col class=\"col-p-score\" />"
+                "<col class=\"col-p-updated\" />"
                 "</colgroup>",
-                "<thead><tr><th>Tank</th><th>Type</th><th>Tier</th><th class=\"score-head\">Best Score</th><th class=\"hide-sm\">Updated</th></tr></thead>",
+                "<thead><tr><th>Tank</th><th>Type</th><th>Tier</th><th class=\"score-head\">Damage</th><th class=\"hide-sm\">Updated</th></tr></thead>",
                 f"<tbody>{_render_player_rows(player_rows)}</tbody>",
                 "</table>",
                 "</div>",
@@ -513,11 +561,11 @@ def _render_stats_top_per_tier(rows: list[tuple[int, int, str, str, int]]) -> st
                 "<details class=\"type-block\" open>",
                 "<summary class=\"type-head\">",
                 f"<div class=\"type-title\"><span class=\"badge\">Tier {tier}</span></div>",
-                "<span class=\"type-count\">Top 3 scores</span>",
+                "<span class=\"type-count\">Top 3 damage</span>",
                 "</summary>",
                 "<div class=\"table-wrap\">",
                 "<table class=\"stats-table\">",
-                "<thead><tr><th class=\"stats-rank\">#</th><th class=\"stats-score\">Score</th><th>Player</th><th>Tank</th></tr></thead>",
+                "<thead><tr><th class=\"stats-rank\">#</th><th class=\"stats-score\">Damage</th><th>Player</th><th>Tank</th></tr></thead>",
                 "<tbody>",
             ]
         )
@@ -651,10 +699,10 @@ def _build_script() -> str:
     if (!changesTarget) return;
     const rows = Array.isArray(DATA.recent_changes) ? DATA.recent_changes : [];
     if (!rows.length) {
-      changesTarget.innerHTML = "<p class='muted'>No recent score changes.</p>";
+      changesTarget.innerHTML = "<p class='muted'>No recent damage changes.</p>";
       return;
     }
-    changesTarget.innerHTML = "<table class='stats-table'><thead><tr><th>ID</th><th>Action</th><th>Tank</th><th>Player</th><th class='stats-score'>Score</th><th class='hide-sm'>When</th></tr></thead><tbody>" +
+    changesTarget.innerHTML = "<table class='stats-table'><thead><tr><th>ID</th><th>Action</th><th>Tank</th><th>Player</th><th class='stats-score'>Damage</th><th class='hide-sm'>When</th></tr></thead><tbody>" +
       rows.slice(0, 10).map((r) => (
         `<tr><td>#${escapeHtml(r.id)}</td><td>${escapeHtml(r.action)}</td><td>${escapeHtml(r.tank_name)}</td><td>${escapeHtml(r.player_name)}</td><td class='stats-score'>${escapeHtml(r.score_change)}</td><td class='hide-sm'>${escapeHtml(r.when)}</td></tr>`
       )).join("") +
@@ -738,7 +786,7 @@ def _build_script() -> str:
       btn.setAttribute("aria-pressed", active ? "true" : "false");
     });
     if (playerToolsWrap) {
-      playerToolsWrap.style.display = view === "player" ? "inline-flex" : "none";
+      playerToolsWrap.style.display = view === "player" ? "flex" : "none";
     }
     setUrlState();
   };
@@ -835,6 +883,8 @@ def _render_html(
     clan_name: str,
     clan_motto: str | None,
     banner_url: str | None,
+    clan_name_align: str,
+    font_family: str,
     grouped: dict[int, dict[str, list[dict]]],
     player_rows: list[dict],
     tank_total: int,
@@ -847,12 +897,16 @@ def _render_html(
 ) -> str:
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     banner = ""
+    safe_align = clan_name_align if clan_name_align in {"left", "center"} else "center"
+    hero_class = "hero"
     if banner_url:
         safe_banner = _safe_web_text(banner_url, quote=True, fallback="")
         banner = (
             f"<img src=\"{safe_banner}\" alt=\"{_safe_web_text(clan_name)} banner\" />"
             "<div class=\"overlay\"></div>"
         )
+    else:
+        hero_class = "hero no-banner"
     content = [
         "<!doctype html>",
         "<html lang=\"en\">",
@@ -862,27 +916,29 @@ def _render_html(
         f"<title>{_safe_web_text(clan_name)} Leaderboard</title>",
         "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">",
         "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>",
-        "<link href=\"https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap\" rel=\"stylesheet\">",
-        f"<style>{_build_styles()}</style>",
+        "<link href=\"https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap\" rel=\"stylesheet\">",
+        f"<style>{_build_styles(font_family)}</style>",
         "</head>",
         "<body>",
         "<main class=\"wrap\">",
-        "<section class=\"hero\">",
-        banner if banner else "<div style=\"height: 220px\"></div>",
-        "<div class=\"hero-content\">",
+        f"<section class=\"{hero_class}\">",
+        banner,
+        f"<div class=\"hero-content {safe_align}\">",
         f"<h1>{_safe_web_text(clan_name)}</h1>",
         (f"<p class=\"meta\">{_safe_web_text(clan_motto)}</p>" if clan_motto else ""),
-        "<p class=\"meta\">Static highscore board by Tier (main level) and Tank Type (sub level). Click headers to collapse.</p>",
         "</div>",
         "</section>",
         "<h2 class=\"section-title\">Leaderboard</h2>",
         "<div class=\"view-controls\">",
+        "<div class=\"view-row top\">",
         "<span class=\"view-label\">View</span>",
         "<div class=\"view-toggle\" role=\"group\" aria-label=\"Leaderboard view\">",
         "<button type=\"button\" data-view-btn=\"tank\" class=\"active\" aria-pressed=\"true\">By Tank</button>",
         "<button type=\"button\" data-view-btn=\"player\" aria-pressed=\"false\">By Player</button>",
         "<button type=\"button\" data-view-btn=\"stats\" aria-pressed=\"false\">Statistics</button>",
         "</div>",
+        "</div>",
+        "<div class=\"view-row bottom\">",
         "<div class=\"bulk-actions\" role=\"group\" aria-label=\"Expand and collapse\">",
         "<button type=\"button\" data-bulk-action=\"collapse\">Collapse All</button>",
         "<button type=\"button\" data-bulk-action=\"expand\">Expand All</button>",
@@ -902,6 +958,7 @@ def _render_html(
         "<div class=\"player-search\">",
         "<label for=\"player-search\">Find Player</label>",
         "<input id=\"player-search\" data-player-search type=\"search\" placeholder=\"Type a player name\" autocomplete=\"off\" />",
+        "</div>",
         "</div>",
         "</div>",
         "</div>",
@@ -942,7 +999,7 @@ def _render_html(
                     "<col class=\"col-player\" />"
                     "<col class=\"col-updated\" />"
                     "</colgroup>",
-                    "<thead><tr><th>Tank</th><th class=\"score-head\">Best Score</th><th>Player</th><th class=\"hide-sm\">Updated</th></tr></thead>",
+                    "<thead><tr><th>Tank</th><th class=\"score-head\">Damage</th><th>Player</th><th class=\"hide-sm\">Updated</th></tr></thead>",
                     f"<tbody>{_render_rows(rows)}</tbody>",
                     "</table>",
                     "</div>",
@@ -988,7 +1045,7 @@ def _render_html(
             _render_stats_time(monthly_rows, "Month"),
             "</div>",
             "<div class=\"stats-card\">",
-            "<h3 class=\"stats-title\">Recent Score Changes</h3>",
+            "<h3 class=\"stats-title\">Recent Damage Changes</h3>",
             "<div data-recent-changes></div>",
             "</div>",
             "</div>",
@@ -1005,7 +1062,7 @@ def _render_html(
     content.extend(
         [
             "<p class=\"footer\">",
-            f"Generated at {_safe_web_text(now)} UTC • Tanks listed: {tank_total}",
+            f"Generated at {_safe_web_text(utils.fmt_utc(now))} • Tanks listed: {tank_total}",
             "</p>",
             "</main>",
             f"<script id=\"tb-data\" type=\"application/json\">{data_blob}</script>",
@@ -1069,10 +1126,19 @@ async def generate_leaderboard_page() -> str | None:
         "recent_changes": recent_changes,
     }
 
+    clan_name_raw = config.WEB_CLAN_NAME
+    if config.WEB_CLAN_NAME_CASE == "uppercase":
+        clan_name_raw = clan_name_raw.upper()
+    font_family = "\"Plus Jakarta Sans\", \"Segoe UI\", sans-serif"
+    if config.WEB_FONT_MODE == "monospace":
+        font_family = "\"IBM Plex Mono\", \"JetBrains Mono\", \"SFMono-Regular\", Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+
     html = _render_html(
-        clan_name=config.WEB_CLAN_NAME,
+        clan_name=clan_name_raw,
         clan_motto=(config.WEB_CLAN_MOTTO or "").strip() or None,
         banner_url=config.WEB_BANNER_URL or None,
+        clan_name_align=config.WEB_CLAN_NAME_ALIGN,
+        font_family=font_family,
         grouped=grouped,
         player_rows=player_rows,
         tank_total=len(tanks),

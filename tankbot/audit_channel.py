@@ -34,7 +34,7 @@ async def send(bot: discord.Client, message: str) -> bool:
     if channel is None:
         return False
     try:
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         payload = f"[{ts}] {message}"
         await channel.send(payload[:1900], allowed_mentions=discord.AllowedMentions.none())
         return True

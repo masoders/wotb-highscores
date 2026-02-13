@@ -58,9 +58,14 @@ def fmt_utc(iso: str | None) -> str:
     try:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     except Exception:
-        return iso  # fallback: show raw if parsing fails
+        # fallback: keep a readable timestamp but strip timezone markers
+        raw = str(iso).strip()
+        raw = re.sub(r"(?<=\d)T(?=\d)", " ", raw)
+        raw = re.sub(r"\s*UTC\b", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"(?:\+00:00|Z)\b", "", raw)
+        return raw.strip() or "—"
     dt = dt.astimezone(timezone.utc)
-    return dt.strftime("%Y-%m-%d %H:%M UTC")
+    return dt.strftime("%Y-%m-%d %H:%M")
 
 def title_case_type(t: str) -> str:
     return {
