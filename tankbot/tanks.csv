@@ -1,6 +1,6 @@
 name,tier,type
 B1,4,heavy
-D.W.2,4,heavy
+D.W. 2,4,heavy
 Matilda,4,heavy
 Pz. B2,4,heavy
 A-20,4,light
@@ -8,24 +8,24 @@ Covenanter,4,light
 Ke-Ho,4,light
 Luchs,4,light
 M5A1 Stuart,4,light
-Pz.,4,light
+Pz. 38 nA,4,light
 Valentine II,4,light
 Valentine Mk. IX,4,light
 A-32,4,medium
-AC1 Sentinel,4,medium
-AMX,4,medium
+AC 1 Sentinel,4,medium
+AMX 40,4,medium
 Chi-He,4,medium
 Lago,4,medium
 M3 Lee,4,medium
 M7,4,medium
 Pz. IV D,4,medium
-T-28 mod.,4,medium
-Type,4,medium
+T-28 mod. 1940,4,medium
+Type 1 Chi-He,4,medium
 Alecto,4,td
 Hetzer,4,td
 Hetzer Kame SP,4,td
 M8A1,4,td
-SAu,4,td
+SAu 40,4,td
 SU-85B,4,td
 T40,4,td
 BDR G1 B,5,heavy
@@ -35,7 +35,7 @@ Excelsior,5,heavy
 KV-1,5,heavy
 KV-220 T,5,heavy
 Medjay,5,heavy
-Mitsu,5,heavy
+Mitsu 108,5,heavy
 T1 Heavy,5,heavy
 T14,5,heavy
 VK 30.01 H,5,heavy
@@ -68,7 +68,7 @@ T-34,5,medium
 Type T-34,5,medium
 Y5 T-34,5,medium
 Angry Connor,5,td
-AT,5,td
+AT 2,5,td
 Nightmare,5,td
 Pz.Sfl. IVc,5,td
 S35 CA,5,td
@@ -79,7 +79,7 @@ SU-85l,5,td
 T67,5,td
 Wolverine,5,td
 40TP Habicha,6,heavy
-ARL,6,heavy
+ARL 44,6,heavy
 Barkhan,6,heavy
 Blasteroid,6,heavy
 Churchill Mk. VI,6,heavy
@@ -94,19 +94,19 @@ KV-1S,6,heavy
 KV-2,6,heavy
 M6,6,heavy
 Magnus,6,heavy
-Obj.,6,heavy
+Obj. 244,6,heavy
 Pawlack Tank,6,heavy
 Skoda P-JS,6,heavy
 T-150,6,heavy
 Thunder,6,heavy
-Tiger,6,heavy
+Tiger 131,6,heavy
 Tiger Kuromorimine SP,6,heavy
 Titan-150,6,heavy
 TOG II,6,heavy
 VK 36.01 H,6,heavy
 59-16,6,light
 Agent,6,light
-AMX,6,light
+AMX 12 t,6,light
 AMXmas,6,light
 Chaffee,6,light
 Frosty,6,light
@@ -116,7 +116,7 @@ Rover,6,light
 T21,6,light
 T37,6,light
 Titan T24 57,6,light
-Type,6,light
+Type 64,6,light
 VK 28.01,6,light
 Wind,6,light
 AC IV Sentinel,6,medium
@@ -141,21 +141,21 @@ Rudolph,6,medium
 Shadowhunter,6,medium
 Sherman Easy 8,6,medium
 Sherman Firefly,6,medium
-Skoda T,6,medium
+Skoda T 25,6,medium
 Spark,6,medium
-Strv,6,medium
+Strv 74,6,medium
 Strv 74A2,6,medium
 T-34-85,6,medium
 T-34-85 Victory,6,medium
 Triumphant,6,medium
 Turbo,6,medium
-Type,6,medium
+Type 58,6,medium
 VK 30.01 D,6,medium
 VK 30.01 P,6,medium
 VK 30.02 M,6,medium
 Y5 Firefly,6,medium
 ARL V39,6,td
-AT,6,td
+AT 8,6,td
 Bassotto,6,td
 Charles,6,td
 Churchill GC,6,td
@@ -172,7 +172,7 @@ SU-100,6,td
 SU-100 Y,6,td
 WZ-131G FT,6,td
 45TP Habicha,7,heavy
-AMX M4,7,heavy
+AMX M4 45,7,heavy
 Annihilator,7,heavy
 Black Prince,7,heavy
 BZ-58,7,heavy
@@ -206,7 +206,8 @@ VK 45.03,7,heavy
 Vulcan,7,heavy
 Vz. 44-1,7,heavy
 Škoda T 45,7,heavy
-AMX M4 45,7,heavy
+AMX 13 57,7,light
+AMX 13 75,7,light
 Kunze Panzer,7,light
 LTG,7,light
 LTTB,7,light
@@ -215,7 +216,7 @@ M41D,7,light
 SP1C,7,light
 T49 A,7,light
 T71,7,light
-Type,7,light
+Type 62,7,light
 WZ-131,7,light
 Basilisk,7,medium
 Chi-Ri,7,medium
@@ -244,7 +245,7 @@ T26E3 Eagle7,7,medium
 T34/100,7,medium
 VK 30.02 D,7,medium
 Y5 ELC bis,7,medium
-AMX AC,7,td
+AMX AC 46,7,td
 AT 15A,7,td
 AT7,7,td
 Challenger,7,td
@@ -271,8 +272,8 @@ WZ Blaze,7,td
 112 Glacial,8,heavy
 53TP Markowskiego,8,heavy
 Action X,8,heavy
-AMX,8,heavy
-AMX M4 mle.,8,heavy
+AMX 50 100,8,heavy
+AMX M4 mle. 49,8,heavy
 Bisonte C45,8,heavy
 BZ-166,8,heavy
 Caernarvon,8,heavy
@@ -282,8 +283,8 @@ Charlemagne,8,heavy
 Chi-Se,8,heavy
 Chieftain,8,heavy
 Chrysler K,8,heavy
-E,8,heavy
-Emil,8,heavy
+E 75 TS,8,heavy
+Emil 1951,8,heavy
 Emil I,8,heavy
 Groundtank,8,heavy
 IS-2Sh,8,heavy
@@ -303,7 +304,7 @@ M6A2E1 EXP,8,heavy
 Object 252U,8,heavy
 Progetto CC55 mod. 54,8,heavy
 Scepter,8,heavy
-Skoda T,8,heavy
+Skoda T 56,8,heavy
 Somua SM,8,heavy
 Strv 81,8,heavy
 T-2020,8,heavy
@@ -323,13 +324,13 @@ VK 45.02 A,8,heavy
 WZ-110,8,heavy
 WZ-111,8,heavy
 WZ-112-2,8,heavy
-AMX,8,light
+AMX 13 90,8,light
 AMX Defender,8,light
 FV301,8,light
 HWK 30,8,light
-leKpz M,8,light
+leKpz M 41 90 mm,8,light
 LT-432,8,light
-Ru,8,light
+Ru 251,8,light
 Swindler,8,light
 T-54 ltwt.,8,light
 T49,8,light
@@ -345,15 +346,15 @@ Centurion Mk. 5/1,8,medium
 Centurion RAAC,8,medium
 Chimera,8,medium
 CS-53,8,medium
-Defender Mk.,8,medium
-ERAC,8,medium
-FCM,8,medium
+Defender Mk. 1,8,medium
+ERAC 105 Proto,8,medium
+FCM 50 t,8,medium
 Fixer,8,medium
 Indien-Pz.,8,medium
-Kpz,8,medium
+Kpz 07 RH,8,medium
 Kpz. Pr.68 (P),8,medium
 Lansen C,8,medium
-Lorraine,8,medium
+Lorraine 40 t,8,medium
 Lorraine Fearless,8,medium
 M48A2 Räumpanzer,8,medium
 M4A1 Rev.,8,medium
@@ -363,9 +364,9 @@ Object 274a,8,medium
 P.44 Pantera,8,medium
 "Panther 8,8",8,medium
 Panther II,8,medium
-Panzer,8,medium
+Panzer 58,8,medium
 Pershing,8,medium
-Progetto,8,medium
+Progetto 46,8,medium
 Skoda T 27,8,medium
 ST-62 Ver. 2,8,medium
 STA-1,8,medium
@@ -374,25 +375,25 @@ T-34-2,8,medium
 T-34-3,8,medium
 T-44,8,medium
 T-44-100,8,medium
-T-54 mod.,8,medium
-T25 Pilot,8,medium
+T-54 mod. 1,8,medium
+T25 Pilot 1,8,medium
 T26E4,8,medium
 T69,8,medium
 T95E2,8,medium
 Titan-54d,8,medium
 TVP VTU Koncept,8,medium
-Type,8,medium
+Type 59,8,medium
 Vickers MBT Mk.3,8,medium
 WZ-122 TM,8,medium
-Škoda T,8,medium
-AMC CDA,8,td
-AMX AC mle.,8,td
-AT,8,td
+Škoda T 27,8,medium
+AMC CDA 105,8,td
+AMX AC mle. 48,8,td
+AT 15,8,td
 Bisonte C45,8,td
 Charioteer,8,td
 Elefant,8,td
 Ferdinand,8,td
-GSOR,8,td
+GSOR 1008,8,td
 Ho-Ri Type I,8,td
 ISU-130,8,td
 ISU-152,8,td
@@ -400,7 +401,7 @@ ISU-152,8,td
 JPanther II,8,td
 Kanonenjagdpanzer,8,td
 Rhm.-B. WT,8,td
-ShPTK-TVP,8,td
+ShPTK-TVP 100,8,td
 Skorpion G,8,td
 SMV CC-64,8,td
 SU-101,8,td
@@ -415,60 +416,60 @@ WZ-120-1G FT,8,td
 50TP Proto,9,heavy
 50TP Tyszkiewick,9,heavy
 AE Phase I,9,heavy
-AMX,9,heavy
+AMX 50 120,9,heavy
 BZ-68,9,heavy
 Conqueror,9,heavy
-E,9,heavy
+E 75,9,heavy
 Emil II,9,heavy
 Fänrik,9,heavy
 IS-8,9,heavy
 K-91,9,heavy
-KpfPz,9,heavy
+KpfPz 70,9,heavy
 Kpz. 07P(E),9,heavy
 M-V Yoh,9,heavy
 M103,9,heavy
 Mäuschen,9,heavy
 Object 452K,9,heavy
 Object 752,9,heavy
-Progetto C50 mod.,9,heavy
+Progetto C50 mod. 66,9,heavy
 Regressor,9,heavy
 ST-I,9,heavy
 TL-7-120,9,heavy
-TNH T VZ.,9,heavy
-Type,9,heavy
+TNH T VZ. 51,9,heavy
+Type 68,9,heavy
 VK 45.02 B,9,heavy
 WZ-111 1-4,9,heavy
 WZ-114,9,heavy
-B-C,9,light
+B-C 25 t AP,9,light
 B-C 25 t Avenir,9,light
-Object,9,light
+Object 84,9,light
 T92E1,9,light
 Vickers CR,9,light
 WZ-132A,9,light
-AMX,9,medium
+AMX 30 1er prot.,9,medium
 Argonaut,9,medium
 Centurion 7/1,9,medium
 Char Futur 4,9,medium
 Cobra,9,medium
 CS-59,9,medium
-E,9,medium
+E 50,9,medium
 Erich K. Bastion,9,medium
 Glacier,9,medium
 Leopard PT A,9,medium
 M46 Patton,9,medium
-Skoda T,9,medium
+Skoda T 50,9,medium
 Standard B,9,medium
 T 55A,9,medium
 T-54,9,medium
 T54E1,9,medium
-Type,9,medium
+Type 61,9,medium
 WZ-120,9,medium
-CC,9,td
+CC 1 MK. 2,9,td
 Conway,9,td
 Foch,9,td
 Ho-Ri T.II,9,td
 Jagdtiger,9,td
-Obj.,9,td
+Obj. 704,9,td
 SU-122-54,9,td
 T30,9,td
 T95,9,td
@@ -479,12 +480,12 @@ WZ-111G FT,9,td
 114 SP2,10,heavy
 116-F3,10,heavy
 60TP,10,heavy
-AMX,10,heavy
+AMX 50 B,10,heavy
 AMX M4,10,heavy
 BZ-75,10,heavy
 Chieftain Mk.6,10,heavy
 Concept 1B,10,heavy
-E,10,heavy
+E 100,10,heavy
 FV215b,10,heavy
 GSOR the tank,10,heavy
 IS-4,10,heavy
@@ -492,7 +493,7 @@ IS-7,10,heavy
 Kranvagn,10,heavy
 M-VI-Yoh,10,heavy
 Maus,10,heavy
-Object,10,heavy
+Object 260,10,heavy
 Object 777,10,heavy
 Rinoceronte,10,heavy
 STRV K,10,heavy
@@ -500,46 +501,48 @@ Super Conqueror,10,heavy
 T110E5,10,heavy
 T57 Heavy,10,heavy
 T95E6,10,heavy
-Type,10,heavy
+Type 71,10,heavy
 VK 72.01 K,10,heavy
 VK 90.01 (P),10,heavy
-Vz.,10,heavy
+Vz. 55,10,heavy
 WZ-111 5A,10,heavy
 WZ-113,10,heavy
-B-C,10,light
+B-C 25 t,10,light
 Rhm. Pzw.,10,light
 Sheridan,10,light
 T-100 LT,10,light
 Vickers Light,10,light
 WZ-132-1,10,light
 121B,10,medium
-AMX,10,medium
+AMX 30 B,10,medium
 Carro 45t,10,medium
 CS-63,10,medium
-E,10,medium
+E 50 M,10,medium
 FV4202,10,medium
-KpfPz,10,medium
-Leopard,10,medium
+KpfPz 50 t,10,medium
+Leopard 1,10,medium
 M48 Patton,10,medium
 M60,10,medium
-Obj.,10,medium
+Obj. 140,10,medium
 Object 907,10,medium
-Progetto,10,medium
+Progetto 65,10,medium
 Project Murat,10,medium
 STB-1,10,medium
 T-22 medium,10,medium
 T-62A,10,medium
 TVP T50/51,10,medium
 WZ-121,10,medium
-Foch,10,td
-FV215b,10,td
+Foch 155,10,td
+FV215b 183,10,td
 FV217 Badger,10,td
 FV4005,10,td
-Grille,10,td
+Grille 15,10,td
 Ho-Ri,10,td
-Jg.Pz. E,10,td
+Jg.Pz. E 100,10,td
 Minotauro,10,td
-Obj.,10,td
+Obj. 263,10,td
+Obj. 268,10,td
+Obj. 268 V4,10,td
 T110E3,10,td
 T110E4,10,td
 WZ-113G FT,10,td

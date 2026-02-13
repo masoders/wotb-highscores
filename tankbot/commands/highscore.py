@@ -128,6 +128,11 @@ async def import_scores(
         tank_lookup[utils.norm_tank_name(str(name))] = canonical
         loose = utils.loose_tank_key(str(name))
         tank_lookup_loose.setdefault(loose, []).append(canonical)
+    alias_lookup: dict[str, tuple[str, int, str]] = {}
+    for alias_raw, tank_name, _created in await db.list_tank_aliases(limit=500):
+        t = tank_lookup.get(utils.norm_tank_name(tank_name))
+        if t:
+            alias_lookup[utils.norm_tank_name(alias_raw)] = t
     auto_mapped: list[tuple[int, str, str, str]] = []
 
     def resolve_tank_row(tank_in: str) -> tuple[tuple[str, int, str] | None, str | None]:
@@ -136,6 +141,11 @@ async def import_scores(
         t = tank_lookup.get(n)
         if t:
             return t, None
+
+        # 1b) explicit alias map (admin-managed)
+        t = alias_lookup.get(n)
+        if t:
+            return t, "alias-explicit"
 
         # 2) loose normalized key (punctuation/diacritics insensitive)
         lk = utils.loose_tank_key(tank_in)
@@ -473,9 +483,12 @@ async def edit(interaction: discord.Interaction, submission_id: int, score: int,
         ephemeral=True,
     )
 
-@grp.command(name="delete", description="Delete an existing submission by id (commanders only)")
-@app_commands.describe(submission_id="Submission id from history")
-async def delete(interaction: discord.Interaction, submission_id: int):
+@grp.command(name="delete", description="Revert or hard-delete a submission by id (commanders only)")
+@app_commands.describe(
+    submission_id="Submission id from history",
+    hard_delete="True = permanently delete row, False = revert score (default)",
+)
+async def delete(interaction: discord.Interaction, submission_id: int, hard_delete: bool = False):
     member = interaction.user
     if not isinstance(member, discord.Member) or not utils.has_commander_role(member):
         await interaction.response.send_message("Nope. Only **Clan Commanders** can delete scores.", ephemeral=True)
@@ -487,6 +500,7 @@ async def delete(interaction: discord.Interaction, submission_id: int):
         submission_id=submission_id,
         actor=interaction.user.display_name,
         created_at=utils.utc_now_z(),
+        hard_delete=hard_delete,
     )
     if not deleted:
         await interaction.followup.send("Submission not found.", ephemeral=True)
@@ -503,19 +517,24 @@ async def delete(interaction: discord.Interaction, submission_id: int):
             f"submission_id={submission_id} "
             f"tank={deleted['tank_name']} "
             f"old={deleted['old_score']} "
-            f"new=— "
+            f"new={_format_audit_score(deleted['new_score'])} "
+            f"hard_delete={hard_delete} "
             f"actor={interaction.user.display_name}"
         ),
     )
 
     notice = await _refresh_webpage_notice(context="Score deletion saved, but")
-    await interaction.followup.send(
-        (
-            f"✅ Deleted submission **#{submission_id}** on **{deleted['tank_name']}** "
-            f"(score **{deleted['old_score']}**).\n{notice}"
-        ),
-        ephemeral=True,
-    )
+    if hard_delete:
+        msg = (
+            f"✅ Hard-deleted submission **#{submission_id}** on **{deleted['tank_name']}** "
+            f"(old score **{deleted['old_score']}**).\n{notice}"
+        )
+    else:
+        msg = (
+            f"✅ Reverted submission **#{submission_id}** on **{deleted['tank_name']}** "
+            f"from **{deleted['old_score']}** to **{deleted['new_score']}**.\n{notice}"
+        )
+    await interaction.followup.send(msg, ephemeral=True)
 
 @grp.command(name="changes", description="Show score audit trail (admin only)")
 @app_commands.describe(limit="How many audit rows (1-50)")
