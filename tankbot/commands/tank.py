@@ -74,7 +74,12 @@ def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord
         names = await db.list_tank_names(query=current, limit=25)
         return [app_commands.Choice(name=n, value=n) for n in names[:25]]
 
-    @grp.command(name="edit", description="Edit a tank (commanders only)")
+    @grp.command(name="edit", description="Edit tank tier/type (commanders only)")
+    @app_commands.describe(
+        name="Tank name",
+        tier="Tier (1..10)",
+        type="Type (light/medium/heavy/td)",
+    )
     async def edit(interaction: discord.Interaction, name: str, tier: int, type: str):
         if not _require_commander(interaction):
             await interaction.response.send_message("Nope. Only **Clan Commanders** can edit tanks.", ephemeral=True)
@@ -93,7 +98,17 @@ def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord
             await interaction.response.send_message("Type must be one of: light, medium, heavy, td.", ephemeral=True)
             return
 
-        await db.edit_tank(name, tier, type, interaction.user.display_name, utils.utc_now_z())
+        try:
+            await db.edit_tank(
+                name=name,
+                tier=tier,
+                ttype=type,
+                actor=interaction.user.display_name,
+                created_at=utils.utc_now_z(),
+            )
+        except ValueError as e:
+            await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+            return
         # Update both old and new buckets
         await forum_index.targeted_update(bot, old_tier, old_type)
         await forum_index.targeted_update(bot, tier, type)
@@ -168,6 +183,63 @@ def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord
 
     @remove.autocomplete("name")
     async def remove_name_autocomplete(_interaction: discord.Interaction, current: str):
+        names = await db.list_tank_names(query=current, limit=25)
+        return [app_commands.Choice(name=n, value=n) for n in names[:25]]
+
+    @grp.command(name="rename", description="Rename a tank (commanders only)")
+    @app_commands.describe(
+        current_name="Current tank name",
+        new_name="New corrected/canonical tank name",
+    )
+    async def rename(interaction: discord.Interaction, current_name: str, new_name: str):
+        if not _require_commander(interaction):
+            await interaction.response.send_message("Nope. Only **Clan Commanders** can rename tanks.", ephemeral=True)
+            return
+        current_name = utils.validate_text("Tank name", current_name, 64)
+        new_name = utils.validate_text("Tank name", new_name, 64)
+        if utils.norm_tank_name(current_name) == utils.norm_tank_name(new_name):
+            await interaction.response.send_message("Current and new names are the same.", ephemeral=True)
+            return
+
+        existing = await db.get_tank(current_name)
+        if not existing:
+            await interaction.response.send_message(await _tank_not_found_message(current_name), ephemeral=True)
+            return
+        tier, ttype = int(existing[1]), str(existing[2])
+
+        try:
+            await db.edit_tank(
+                name=current_name,
+                tier=tier,
+                ttype=ttype,
+                actor=interaction.user.display_name,
+                created_at=utils.utc_now_z(),
+                new_name=new_name,
+            )
+        except ValueError as e:
+            await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+            return
+
+        await forum_index.targeted_update(bot, tier, ttype)
+        await _refresh_webpage()
+        await audit_channel.send(
+            interaction.client,
+            (
+                "🧾 [tank rename] "
+                f"from={current_name} "
+                f"to={new_name} "
+                f"tier={tier} "
+                f"type={ttype} "
+                f"actor={interaction.user.display_name}"
+            ),
+        )
+        await interaction.response.send_message(
+            f"✅ Renamed **{current_name}** -> **{new_name}**.",
+            ephemeral=True,
+        )
+
+    @rename.autocomplete("current_name")
+    async def rename_current_name_autocomplete(_interaction: discord.Interaction, current: str):
         names = await db.list_tank_names(query=current, limit=25)
         return [app_commands.Choice(name=n, value=n) for n in names[:25]]
 
