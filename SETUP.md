@@ -8,6 +8,7 @@
 
 ## 1. Overview
 This bot tracks tank highscores, allows controlled submissions, auto-maintains read-only forum leaderboards, runs encrypted weekly backups, and provides verification and health checks.
+It can also track clan members from WG API for player autocomplete and roster cleanup.
 
 ---
 
@@ -130,6 +131,15 @@ BACKUP_HOUR=3
 BACKUP_MINUTE=0
 BACKUP_TZ=Europe/Helsinki
 
+# Optional WG clan player sync
+WG_API_APPLICATION_ID=
+WG_API_GAME=wotb
+WG_API_REGION=eu
+WG_CLAN_IDS=
+WG_REFRESH_HOUR=4
+WG_REFRESH_MINUTE=0
+WG_REFRESH_TZ=Europe/Helsinki
+
 BACKUP_ENCRYPTION_PASSPHRASE=LONG_RANDOM_STRING
 
 LOG_LEVEL=INFO
@@ -188,13 +198,18 @@ Creates locked, pinned, tagged threads per Tier × Type.
 
 ### Clan Commanders
 - /highscore submit
-
-### Admins
-- /tank …
+- /highscore edit
+- /highscore delete
+- /highscore refresh_web
+- /highscore refresh_players
 - /backup run_now
 - /backup status
 - /backup verify_latest
+
+### Admins
+- /tank …
 - /system health
+- /system reload
 
 ---
 

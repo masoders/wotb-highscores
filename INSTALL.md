@@ -37,6 +37,16 @@ BACKUP_HOUR=3
 BACKUP_MINUTE=0
 BACKUP_TZ=Europe/Helsinki
 
+# Optional WG clan player sync
+WG_API_APPLICATION_ID=
+WG_API_GAME=wotb
+WG_API_REGION=eu
+WG_CLAN_IDS=
+WG_REFRESH_HOUR=4
+WG_REFRESH_MINUTE=0
+WG_REFRESH_TZ=Europe/Helsinki
+WG_API_TIMEOUT_SECONDS=15
+
 # Optional
 BACKUP_GUILD_ID=
 BACKUP_ENCRYPTION_PASSPHRASE=
@@ -94,4 +104,10 @@ Then verify backup flow:
 ```text
 /backup run_now
 /backup verify_latest
+```
+
+Optional WG sync check:
+
+```text
+/highscore refresh_players
 ```

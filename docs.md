@@ -32,6 +32,9 @@ Legend:
 - `/highscore refresh_web`
   - Description: Regenerate static leaderboard webpage manually.
   - Example: `/highscore refresh_web`
+- `/highscore refresh_players`
+  - Description: Refresh WG clan player list now and show added/removed/renamed names.
+  - Example: `/highscore refresh_players`
 - `/tank add <name> <tier> <type>`
   - Description: Add a tank to roster.
   - Example: `/tank add name:"Tiger II" tier:8 type:heavy`
@@ -47,6 +50,9 @@ Legend:
 - `/tank export_csv`
   - Description: Export tank roster as CSV.
   - Example: `/tank export_csv`
+- `/tank export_scores_csv`
+  - Description: Export current best score per tank as CSV.
+  - Example: `/tank export_scores_csv`
 - `/backup run_now`
   - Description: Run database backup immediately.
   - Example: `/backup run_now`
@@ -81,7 +87,7 @@ Legend:
   - Description: Create/repair missing index threads only.
   - Example: `/tank rebuild_index_missing`
 - `/system health`
-  - Description: Show runtime, DB, backup, and dashboard health.
+  - Description: Show runtime, DB, backup, WG refresh, and dashboard health.
   - Example: `/system health`
 - `/system reload`
   - Description: Reload command modules and sync slash commands.
@@ -106,11 +112,28 @@ Legend:
   - Most #1 Tier×Type buckets
 
 
-## Backup (Admin)
+## Backup (Commander)
 - `/backup run_now` — run an immediate DB backup and post to backup channel
 - `/backup status` — show schedule and next run
 
 Backups require env vars: BACKUP_CHANNEL_ID, BACKUP_WEEKDAY, BACKUP_HOUR, BACKUP_MINUTE, BACKUP_TZ
+
+## WG Clan Player Sync
+Required env vars:
+- `WG_API_APPLICATION_ID`
+- `WG_API_REGION` (`eu|na|com|asia`)
+- `WG_CLAN_IDS` (comma-separated clan ids)
+
+Optional env vars:
+- `WG_API_GAME` (`wotb` default)
+- `WG_REFRESH_HOUR`, `WG_REFRESH_MINUTE`, `WG_REFRESH_TZ`
+- `WG_API_TIMEOUT_SECONDS`
+
+Behavior:
+- Daily automatic refresh from WG API.
+- Commander-triggered refresh via `/highscore refresh_players`.
+- Players who left tracked clans are removed from `clan_players`.
+- Player-name autocomplete in `/highscore submit|edit|qualify` uses tracked clan players first.
 
 
 Admin Server Option:
