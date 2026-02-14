@@ -417,6 +417,7 @@ tbody tr:hover { background: #253a5a66; }
   background: #13223dcc;
   padding: 12px;
 }
+.stats-card-wide { margin-top: 14px; }
 .stats-title {
   margin: 0 0 10px;
   color: #dce8ff;
@@ -659,7 +660,7 @@ def _build_script() -> str:
   const filterType = document.querySelector("[data-filter-type]");
   const filterReset = document.querySelector("[data-filter-reset]");
   const changesTarget = document.querySelector("[data-recent-changes]");
-  let current = "tank";
+  let current = "stats";
   let playerSortMode = "name-asc";
   let playerQuery = "";
   let tierFilter = "";
@@ -688,7 +689,7 @@ def _build_script() -> str:
   const applyFromUrl = () => {
     const p = new URLSearchParams(window.location.search);
     const view = p.get("view");
-    current = view === "player" || view === "stats" ? view : "tank";
+    current = view === "tank" || view === "player" || view === "stats" ? view : "stats";
     tierFilter = (p.get("tier") || "").trim();
     typeFilter = normalize(p.get("type"));
   };
@@ -811,7 +812,7 @@ def _build_script() -> str:
   };
 
   buttons.forEach((btn) => {
-    btn.addEventListener("click", () => update(btn.getAttribute("data-view-btn") || "tank"));
+    btn.addEventListener("click", () => update(btn.getAttribute("data-view-btn") || "stats"));
   });
 
   if (playerSortButtons.length) {
@@ -953,9 +954,9 @@ def _render_html(
         "<div class=\"view-row top\">",
         "<span class=\"view-label\">View</span>",
         "<div class=\"view-toggle\" role=\"group\" aria-label=\"Leaderboard view\">",
-        "<button type=\"button\" data-view-btn=\"tank\" class=\"active\" aria-pressed=\"true\">By Tank</button>",
+        "<button type=\"button\" data-view-btn=\"stats\" class=\"active\" aria-pressed=\"true\">Statistics</button>",
+        "<button type=\"button\" data-view-btn=\"tank\" aria-pressed=\"false\">By Tank</button>",
         "<button type=\"button\" data-view-btn=\"player\" aria-pressed=\"false\">By Player</button>",
-        "<button type=\"button\" data-view-btn=\"stats\" aria-pressed=\"false\">Statistics</button>",
         "</div>",
         "</div>",
         "<div class=\"view-row bottom\">",
@@ -982,9 +983,44 @@ def _render_html(
         "</div>",
         "</div>",
         "</div>",
-        "<section class=\"view-panel\" data-main-view=\"tank\">",
     ]
-
+    content.extend(
+        [
+            "<section class=\"view-panel\" data-main-view=\"stats\">",
+            "<div class=\"tier-card\">",
+            "<div class=\"tier-body\">",
+            "<div class=\"stats-grid\">",
+            "<div class=\"stats-card\">",
+            "<h3 class=\"stats-title\">Unique Players</h3>",
+            f"<div class=\"stats-kpi\">{unique_player_count}</div>",
+            "</div>",
+            "<div class=\"stats-card\">",
+            "<h3 class=\"stats-title\">Top 10 Most Recorded Tanks</h3>",
+            _render_stats_tanks(top_tanks_rows),
+            "</div>",
+            "<div class=\"stats-card\">",
+            "<h3 class=\"stats-title\">Submissions Per Year</h3>",
+            _render_stats_time(yearly_rows, "Year"),
+            "</div>",
+            "<div class=\"stats-card\">",
+            "<h3 class=\"stats-title\">Submissions Per Month</h3>",
+            _render_stats_time(monthly_rows, "Month"),
+            "</div>",
+            "</div>",
+            "<div class=\"stats-card stats-card-wide\">",
+            "<h3 class=\"stats-title\">Recent Damage Changes</h3>",
+            "<div data-recent-changes></div>",
+            "</div>",
+            "<div class=\"stats-card stats-card-wide\">",
+            "<h3 class=\"stats-title\">Top 3 Per Tier (all tanks)</h3>",
+            _render_stats_top_per_tier(top_per_tier_rows),
+            "</div>",
+            "</div>",
+            "</div>",
+            "</section>",
+        ]
+    )
+    content.append("<section class=\"view-panel\" data-main-view=\"tank\">")
     for tier in sorted(grouped.keys(), reverse=True):
         tier_block = grouped[tier]
         bucket_count = sum(len(rows) for rows in tier_block.values())
@@ -1036,42 +1072,6 @@ def _render_html(
             "<div class=\"tier-body\">",
             "<div data-player-list>",
             _render_player_blocks(player_rows),
-            "</div>",
-            "</div>",
-            "</div>",
-            "</section>",
-        ]
-    )
-    content.extend(
-        [
-            "<section class=\"view-panel\" data-main-view=\"stats\">",
-            "<div class=\"tier-card\">",
-            "<div class=\"tier-body\">",
-            "<div class=\"stats-grid\">",
-            "<div class=\"stats-card\">",
-            "<h3 class=\"stats-title\">Unique Players</h3>",
-            f"<div class=\"stats-kpi\">{unique_player_count}</div>",
-            "</div>",
-            "<div class=\"stats-card\">",
-            "<h3 class=\"stats-title\">Top 10 Most Recorded Tanks</h3>",
-            _render_stats_tanks(top_tanks_rows),
-            "</div>",
-            "<div class=\"stats-card\">",
-            "<h3 class=\"stats-title\">Submissions Per Year</h3>",
-            _render_stats_time(yearly_rows, "Year"),
-            "</div>",
-            "<div class=\"stats-card\">",
-            "<h3 class=\"stats-title\">Submissions Per Month</h3>",
-            _render_stats_time(monthly_rows, "Month"),
-            "</div>",
-            "<div class=\"stats-card\">",
-            "<h3 class=\"stats-title\">Recent Damage Changes</h3>",
-            "<div data-recent-changes></div>",
-            "</div>",
-            "</div>",
-            "<div class=\"stats-card\" style=\"margin-top: 14px;\">",
-            "<h3 class=\"stats-title\">Top 3 Per Tier (all tanks)</h3>",
-            _render_stats_top_per_tier(top_per_tier_rows),
             "</div>",
             "</div>",
             "</div>",

@@ -65,6 +65,28 @@ CREATE TABLE IF NOT EXISTS tank_aliases (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS clan_players (
+    region TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    clan_id INTEGER NOT NULL,
+    player_name_raw TEXT NOT NULL,
+    player_name_norm TEXT NOT NULL,
+    last_synced_at TEXT NOT NULL,
+    PRIMARY KEY (region, account_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_clan_players_region_name
+ON clan_players (region, player_name_raw);
+
+CREATE INDEX IF NOT EXISTS idx_clan_players_region_norm
+ON clan_players (region, player_name_norm);
+
+CREATE TABLE IF NOT EXISTS sync_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL
@@ -470,6 +492,37 @@ async def _migration_008_enforce_tank_integrity(db: aiosqlite.Connection):
     finally:
         await db.execute("PRAGMA foreign_keys = ON;")
 
+
+async def _migration_009_add_clan_player_tracking(db: aiosqlite.Connection):
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS clan_players (
+            region TEXT NOT NULL,
+            account_id INTEGER NOT NULL,
+            clan_id INTEGER NOT NULL,
+            player_name_raw TEXT NOT NULL,
+            player_name_norm TEXT NOT NULL,
+            last_synced_at TEXT NOT NULL,
+            PRIMARY KEY (region, account_id)
+        )
+        """
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_clan_players_region_name ON clan_players (region, player_name_raw)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_clan_players_region_norm ON clan_players (region, player_name_norm)"
+    )
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sync_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
 async def _run_migrations(db: aiosqlite.Connection):
     migrations = [
         (1, _migration_001_cleanup_submission_indexes),
@@ -480,6 +533,7 @@ async def _run_migrations(db: aiosqlite.Connection):
         (6, _migration_006_canonicalize_player_display_names),
         (7, _migration_007_add_tank_aliases_table),
         (8, _migration_008_enforce_tank_integrity),
+        (9, _migration_009_add_clan_player_tracking),
     ]
     for version, fn in migrations:
         cur = await db.execute(
@@ -643,64 +697,136 @@ async def _log_score_change_conn(
         ),
     )
 
-async def get_player_name_canonical(player_input: str) -> str:
-    player_norm = utils.normalize_player(player_input)
-    if not player_norm:
-        return player_input
-    async with _connect_db() as db:
-        cur = await db.execute(
-            """
-            SELECT player_name_raw
-            FROM submissions
-            WHERE player_name_norm = ?
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1
-            """,
-            (player_norm,),
+async def clan_players_last_sync(region: str) -> str | None:
+    key = f"wg:last_sync:{region.strip().lower()}"
+    async with _connect_db() as conn:
+        cur = await conn.execute(
+            "SELECT value FROM sync_state WHERE key = ? LIMIT 1",
+            (key,),
         )
         row = await cur.fetchone()
         await cur.close()
-    return str(row[0]) if row and row[0] else player_input
+    return str(row[0]) if row and row[0] else None
 
-async def suggest_player_names(player_input: str, limit: int = 3) -> list[str]:
-    candidate = (player_input or "").strip()
-    if not candidate:
-        return []
-    async with _connect_db() as db:
-        cur = await db.execute(
-            """
-            WITH ranked AS (
-                SELECT
-                    player_name_norm,
-                    player_name_raw,
-                    created_at,
-                    id,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY player_name_norm
-                        ORDER BY created_at DESC, id DESC
-                    ) AS rn
-                FROM submissions
-            )
-            SELECT player_name_raw
-            FROM ranked
-            WHERE rn = 1
-            ORDER BY created_at DESC, id DESC
-            LIMIT 500
-            """
+async def get_sync_state(key: str) -> str | None:
+    async with _connect_db() as conn:
+        cur = await conn.execute(
+            "SELECT value FROM sync_state WHERE key = ? LIMIT 1",
+            (str(key),),
         )
-        rows = await cur.fetchall()
+        row = await cur.fetchone()
         await cur.close()
-    choices = [str(r[0]) for r in rows if r and r[0]]
-    if not choices:
-        return []
+    return str(row[0]) if row and row[0] else None
 
-    exact_norm = utils.normalize_player(candidate)
-    filtered = [c for c in choices if utils.normalize_player(c) != exact_norm]
-    return difflib.get_close_matches(candidate, filtered, n=max(1, min(limit, 5)), cutoff=0.82)
+async def set_sync_state(key: str, value: str, updated_at: str | None = None):
+    ts = str(updated_at or utils.utc_now_z())
+    async with _connect_db() as conn:
+        await conn.execute(
+            """
+            INSERT INTO sync_state (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+              value = excluded.value,
+              updated_at = excluded.updated_at
+            """,
+            (str(key), str(value), ts),
+        )
+        await conn.commit()
 
-async def list_player_names(query: str = "", limit: int = 25) -> list[str]:
+async def replace_clan_players(
+    *,
+    region: str,
+    members: list[tuple[int, int, str]],
+    synced_at: str,
+) -> dict[str, object]:
+    region_norm = region.strip().lower()
+    deduped: dict[int, tuple[int, str, str]] = {}
+    for account_id, clan_id, player_name_raw in members:
+        try:
+            raw = utils.validate_text("Player", str(player_name_raw), 64)
+        except Exception:
+            continue
+        deduped[int(account_id)] = (int(clan_id), raw, utils.normalize_player(raw))
+
+    async with _connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT account_id, player_name_raw
+            FROM clan_players
+            WHERE region = ?
+            """,
+            (region_norm,),
+        )
+        existing_rows = await cur.fetchall()
+        await cur.close()
+        existing_by_id = {int(r[0]): str(r[1]) for r in existing_rows}
+
+        incoming_ids = set(deduped.keys())
+        existing_ids = set(existing_by_id.keys())
+        added_ids = sorted(incoming_ids - existing_ids)
+        removed_ids = sorted(existing_ids - incoming_ids)
+        renamed = []
+        for account_id in sorted(incoming_ids & existing_ids):
+            old_name = existing_by_id[account_id]
+            new_name = deduped[account_id][1]
+            if old_name != new_name:
+                renamed.append((old_name, new_name))
+
+        if removed_ids:
+            placeholders = ",".join("?" for _ in removed_ids)
+            await conn.execute(
+                f"DELETE FROM clan_players WHERE region = ? AND account_id IN ({placeholders})",
+                (region_norm, *removed_ids),
+            )
+
+        if deduped:
+            await conn.executemany(
+                """
+                INSERT INTO clan_players (
+                    region, account_id, clan_id, player_name_raw, player_name_norm, last_synced_at
+                )
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(region, account_id) DO UPDATE SET
+                  clan_id = excluded.clan_id,
+                  player_name_raw = excluded.player_name_raw,
+                  player_name_norm = excluded.player_name_norm,
+                  last_synced_at = excluded.last_synced_at
+                """,
+                [
+                    (region_norm, account_id, clan_id, raw, norm, synced_at)
+                    for account_id, (clan_id, raw, norm) in deduped.items()
+                ],
+            )
+
+        key = f"wg:last_sync:{region_norm}"
+        await conn.execute(
+            """
+            INSERT INTO sync_state (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+              value = excluded.value,
+              updated_at = excluded.updated_at
+            """,
+            (key, synced_at, synced_at),
+        )
+        await conn.commit()
+
+    added_names = sorted([deduped[i][1] for i in added_ids], key=str.casefold)
+    removed_names = sorted([existing_by_id[i] for i in removed_ids], key=str.casefold)
+    return {
+        "total": len(deduped),
+        "added_count": len(added_names),
+        "removed_count": len(removed_names),
+        "renamed_count": len(renamed),
+        "added_names": added_names,
+        "removed_names": removed_names,
+        "renamed": renamed,
+        "synced_at": synced_at,
+    }
+
+async def _list_player_names_from_submissions(query: str = "", limit: int = 25) -> list[str]:
     q = (query or "").strip()
-    limit = max(1, min(limit, 25))
+    limit = max(1, min(limit, 500))
     async with _connect_db() as db:
         if q:
             cur = await db.execute(
@@ -751,6 +877,100 @@ async def list_player_names(query: str = "", limit: int = 25) -> list[str]:
         rows = await cur.fetchall()
         await cur.close()
     return [str(r[0]) for r in rows if r and r[0]]
+
+async def get_player_name_canonical(player_input: str) -> str:
+    player_norm = utils.normalize_player(player_input)
+    if not player_norm:
+        return player_input
+    async with _connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT player_name_raw
+            FROM clan_players
+            WHERE region = ? AND player_name_norm = ?
+            ORDER BY player_name_raw COLLATE NOCASE ASC
+            LIMIT 1
+            """,
+            (config.WG_API_REGION, player_norm),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        if row and row[0]:
+            return str(row[0])
+
+        cur = await db.execute(
+            """
+            SELECT player_name_raw
+            FROM submissions
+            WHERE player_name_norm = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (player_norm,),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+    return str(row[0]) if row and row[0] else player_input
+
+async def suggest_player_names(player_input: str, limit: int = 3) -> list[str]:
+    candidate = (player_input or "").strip()
+    if not candidate:
+        return []
+    async with _connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT player_name_raw
+            FROM clan_players
+            WHERE region = ?
+            ORDER BY player_name_raw COLLATE NOCASE ASC
+            LIMIT 500
+            """,
+            (config.WG_API_REGION,),
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+    choices = [str(r[0]) for r in rows if r and r[0]]
+    if not choices:
+        choices = await _list_player_names_from_submissions(query="", limit=25)
+    if not choices:
+        return []
+
+    exact_norm = utils.normalize_player(candidate)
+    filtered = [c for c in choices if utils.normalize_player(c) != exact_norm]
+    return difflib.get_close_matches(candidate, filtered, n=max(1, min(limit, 5)), cutoff=0.82)
+
+async def list_player_names(query: str = "", limit: int = 25) -> list[str]:
+    q = (query or "").strip()
+    limit = max(1, min(limit, 25))
+    async with _connect_db() as db:
+        if q:
+            cur = await db.execute(
+                """
+                SELECT player_name_raw
+                FROM clan_players
+                WHERE region = ? AND player_name_raw LIKE ?
+                ORDER BY player_name_raw COLLATE NOCASE ASC
+                LIMIT ?
+                """,
+                (config.WG_API_REGION, f"%{q}%", limit),
+            )
+        else:
+            cur = await db.execute(
+                """
+                SELECT player_name_raw
+                FROM clan_players
+                WHERE region = ?
+                ORDER BY player_name_raw COLLATE NOCASE ASC
+                LIMIT ?
+                """,
+                (config.WG_API_REGION, limit),
+            )
+        rows = await cur.fetchall()
+        await cur.close()
+    names = [str(r[0]) for r in rows if r and r[0]]
+    if names:
+        return names
+    return await _list_player_names_from_submissions(query=q, limit=limit)
 
 async def canonical_player_name_map() -> dict[str, str]:
     async with _connect_db() as db:

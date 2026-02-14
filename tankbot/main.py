@@ -4,7 +4,7 @@ import datetime as dt
 import importlib
 import logging
 
-from . import config, db, backup, health, logging_setup, static_site
+from . import config, db, backup, health, logging_setup, static_site, wg_sync
 from .commands import help_cmd, highscore, tank, backup_cmd
 
 intents = discord.Intents.default()
@@ -17,21 +17,36 @@ def _guild_obj():
     return discord.Object(id=config.GUILD_ID) if config.GUILD_ID else None
 
 async def _register_and_sync_commands(*, reload_modules: bool = False):
-    global help_cmd, highscore, tank, backup_cmd, health
+    global help_cmd, highscore, tank, backup_cmd, health, backup, wg_sync
 
     if reload_modules:
         # Reload dependency modules first so command modules bind fresh imports.
         from . import utils as _utils, forum_index as _forum_index
         from . import db as _db
+        from . import backup as _backup, wg_sync as _wg_sync
         _utils = importlib.reload(_utils)
         _forum_index = importlib.reload(_forum_index)
         _db = importlib.reload(_db)
+        _backup = importlib.reload(_backup)
+        _wg_sync = importlib.reload(_wg_sync)
+        backup = _backup
+        wg_sync = _wg_sync
 
         help_cmd = importlib.reload(help_cmd)
         highscore = importlib.reload(highscore)
         tank = importlib.reload(tank)
         backup_cmd = importlib.reload(backup_cmd)
         health = importlib.reload(health)
+
+    # Defensive fix: runtime reload can hit MissingApplicationID on some sessions.
+    # Ensure the running client has an application_id before tree.sync().
+    if bot.application_id is None and bot.user is not None:
+        try:
+            app_info = await bot.application_info()
+            bot._connection.application_id = int(app_info.id)  # type: ignore[attr-defined]
+        except Exception:
+            # Let sync raise the original error if resolution fails.
+            pass
 
     guild = _guild_obj()
 
@@ -67,8 +82,11 @@ async def on_ready():
     # Start backup scheduler
     if not backup.weekly_backup_loop.is_running():
         backup.weekly_backup_loop.start(bot)
+    if not wg_sync.daily_clan_sync_loop.is_running():
+        wg_sync.daily_clan_sync_loop.start(bot)
 
     await _register_and_sync_commands(reload_modules=False)
+    await wg_sync.bootstrap_if_needed()
 
     try:
         await static_site.generate_leaderboard_page()
