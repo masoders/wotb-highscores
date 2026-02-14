@@ -10,6 +10,16 @@ from . import config, db, backup, wg_sync
 _started_at = dt.datetime.utcnow()
 log = logging.getLogger(__name__)
 
+def _local_tz() -> dt.tzinfo:
+    tz = dt.datetime.now().astimezone().tzinfo
+    return tz if tz is not None else dt.timezone.utc
+
+def _safe_zoneinfo(name: str, fallback: dt.tzinfo) -> dt.tzinfo:
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return fallback
+
 def _fmt_ts(value: str | None, to_tz: dt.tzinfo | None = None) -> str:
     if not value:
         return "n/a"
@@ -101,8 +111,9 @@ async def system_health(interaction: discord.Interaction):
         last_backup_msg = await db.get_sync_state("backup:last_msg")
     if not last_scheduled_backup_utc:
         last_scheduled_backup_utc = await db.get_sync_state("backup:last_scheduled")
-    backup_tz = ZoneInfo(config.BACKUP_TZ)
-    display_tz = backup_tz
+    local_tz = _local_tz()
+    backup_tz = _safe_zoneinfo(config.BACKUP_TZ, local_tz)
+    display_tz = local_tz
     now_backup_local = dt.datetime.now(backup_tz)
     next_backup = getattr(backup.weekly_backup_loop, "next_run", backup.next_weekly_run(now_backup_local))
 
@@ -127,10 +138,7 @@ async def system_health(interaction: discord.Interaction):
         last_wg_ok = True
     if not last_scheduled_wg_utc:
         last_scheduled_wg_utc = await db.get_sync_state(f"wg:last_scheduled:{wg_region}")
-    try:
-        wg_tz = ZoneInfo(config.WG_REFRESH_TZ)
-    except Exception:
-        wg_tz = ZoneInfo("UTC")
+    wg_tz = _safe_zoneinfo(config.WG_REFRESH_TZ, local_tz)
     now_wg_local = dt.datetime.now(wg_tz)
     wg_next_fn = getattr(wg_sync, "next_wg_sync_run", None)
     next_wg = wg_next_fn() if callable(wg_next_fn) else None

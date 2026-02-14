@@ -654,7 +654,7 @@ async def history(interaction: discord.Interaction, limit: int = 10):
     limit = max(1, min(limit, 25))
     rows = await db.get_recent(limit)
     if not rows:
-        await interaction.response.send_message("No submissions yet.", ephemeral=True)
+        await interaction.followup.send("No submissions yet.", ephemeral=True)
         return
     await interaction.followup.send("⏳ Building history…", ephemeral=True)
     champ = await db.get_champion()

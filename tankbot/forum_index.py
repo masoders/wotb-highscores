@@ -1,5 +1,6 @@
 import discord
 import re
+from datetime import datetime, timezone
 
 from . import config, db, utils
 
@@ -11,7 +12,29 @@ def _safe_text(value: object, *, fallback: str = "—") -> str:
     raw = str(value) if value is not None else fallback
     if not raw:
         raw = fallback
-    return discord.utils.escape_markdown(discord.utils.escape_mentions(raw))
+    return discord.utils.escape_mentions(raw)
+
+
+def _fmt_local(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    s = str(iso).strip()
+    while s.endswith("ZZ"):
+        s = s[:-1]
+    try:
+        ts = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        local_tz = datetime.now().astimezone().tzinfo
+        if local_tz is not None:
+            ts = ts.astimezone(local_tz)
+        return ts.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        raw = str(iso).strip()
+        raw = re.sub(r"(?<=\d)T(?=\d)", " ", raw)
+        raw = re.sub(r"\s*UTC\b", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"(?:\+00:00|Z)\b", "", raw)
+        return raw.strip() or "—"
 
 
 def _split_into_pages(header_lines: list[str], table_lines: list[str], footer_lines: list[str], max_len: int = 1900) -> list[str]:
@@ -275,7 +298,7 @@ def render_bucket_snapshot_pages(tier: int, type_: str, rows: list[dict]) -> lis
     if latest:
         latest_line = (
             f"Latest: {_safe_text(latest.get('tank_name'))}  {latest['score']}  "
-            f"{_safe_text(latest.get('player_name'))}  {_safe_text(utils.fmt_utc(latest.get('created_at')))}"
+            f"{_safe_text(latest.get('player_name'))}  {_safe_text(_fmt_local(latest.get('created_at')))}"
         )
 
     top_line = "Top:    —"
@@ -296,7 +319,7 @@ def render_bucket_snapshot_pages(tier: int, type_: str, rows: list[dict]) -> lis
         tank = _safe_text(r.get("tank_name"))
         score = r.get("score")
         player = _safe_text(r.get("player_name"))
-        when = _safe_text(utils.fmt_utc(r["created_at"])) if r.get("created_at") else "—"
+        when = _safe_text(_fmt_local(r["created_at"])) if r.get("created_at") else "—"
         table_rows.append([
             tank,
             "—" if score is None else str(score),
@@ -324,7 +347,7 @@ def render_bucket_snapshot(tier: int, type_: str, rows: list[dict]) -> str:
         latest = max(scored, key=lambda r: r.get("created_at") or "")
         top = max(scored, key=lambda r: int(r.get("score") or 0))
 
-        latest_when = utils.fmt_utc(latest.get("created_at"))
+        latest_when = _fmt_local(latest.get("created_at"))
         header_lines.append(
             f"Latest: {_safe_text(latest.get('tank_name'))}  {latest['score']}  "
             f"{_safe_text(utils.clip(latest.get('player_name') or '—', 16))}  {_safe_text(latest_when)}"
@@ -343,7 +366,7 @@ def render_bucket_snapshot(tier: int, type_: str, rows: list[dict]) -> str:
         if r.get("score") is None:
             table_rows.append([tank, "—", "—", "—"])
         else:
-            when = _safe_text(utils.fmt_utc(r.get("created_at")))
+            when = _safe_text(_fmt_local(r.get("created_at")))
             player = _safe_text(utils.clip(r.get("player_name") or "—", 20))
             table_rows.append([tank, str(r["score"]), player, when])
 
