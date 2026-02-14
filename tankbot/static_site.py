@@ -4,11 +4,16 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from html import escape
 import json
+import logging
 from pathlib import Path
+from urllib.parse import quote
+
+import aiohttp
 
 from . import config, db, utils
 
 TYPE_ORDER = {"heavy": 0, "medium": 1, "light": 2, "td": 3}
+log = logging.getLogger(__name__)
 
 
 def _safe_web_text(value: object, *, fallback: str = "—", quote: bool = False) -> str:
@@ -19,11 +24,6 @@ def _safe_web_text(value: object, *, fallback: str = "—", quote: bool = False)
     # Neutralize mention-like strings for safer sharing/copying contexts.
     cleaned = cleaned.replace("@", "@\u200b")
     return escape(cleaned, quote=quote)
-
-
-def _latest_created_at(rows: list[dict]) -> str | None:
-    stamped = [str(r.get("created_at") or "") for r in rows if r.get("created_at")]
-    return max(stamped) if stamped else None
 
 
 def _json_for_html(obj: object) -> str:
@@ -366,13 +366,11 @@ th {
 .col-type { width: 14%; }
 .col-tier { width: 10%; }
 .col-score { width: 16%; }
-.col-player { width: 20%; }
-.col-updated { width: 20%; }
+.col-player { width: 38%; }
 .col-p-tank { width: 40%; }
 .col-p-type { width: 18%; }
 .col-p-tier { width: 10%; }
-.col-p-score { width: 14%; }
-.col-p-updated { width: 18%; }
+.col-p-score { width: 32%; }
 .score-head, .score {
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -393,6 +391,14 @@ tbody tr:hover { background: #253a5a66; }
 .muted { color: var(--muted); }
 .tank-name { color: var(--tank-name-color); }
 .player-name { color: var(--player-name-color); }
+.player-link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dotted #5f7db4;
+}
+.player-link:hover {
+  text-decoration: underline;
+}
 .badge {
   display: inline-block;
   padding: 3px 8px;
@@ -442,7 +448,7 @@ tbody tr:hover { background: #253a5a66; }
   .filter-tools input, .filter-tools select { width: 100%; }
   .col-tank { width: 58%; }
   .col-score { width: 22%; }
-  .col-player { width: 20%; }
+  .col-player { width: 42%; }
   .col-p-tank { width: 52%; }
   .col-p-type { width: 20%; }
   .col-p-tier { width: 10%; }
@@ -469,15 +475,30 @@ def _format_score(score: int | None) -> str:
     return f"{int(score):,}"
 
 
+def _blitzstars_player_url(player_name: str) -> str | None:
+    name = (player_name or "").strip()
+    if not name or name == "—":
+        return None
+    region = (config.WG_API_REGION or "eu").strip().lower()
+    return f"https://www.blitzstars.com/player/{quote(region, safe='')}/{quote(name, safe='')}"
+
+
+def _render_player_link(player_name: str) -> str:
+    safe_name = _safe_web_text(player_name)
+    url = _blitzstars_player_url(player_name)
+    if not url:
+        return safe_name
+    safe_url = _safe_web_text(url, quote=True)
+    return f"<a class=\"player-link\" href=\"{safe_url}\" target=\"_blank\" rel=\"noopener noreferrer\">{safe_name}</a>"
+
+
 def _render_rows(rows: list[dict]) -> str:
     out: list[str] = []
     for row in rows:
         tank = _safe_web_text(row.get("tank_name"), fallback="Unknown")
         score = row.get("score")
         player_raw = str(row.get("player_name") or "—")
-        player = _safe_web_text(player_raw)
-        when_raw = utils.fmt_utc(row.get("created_at"))
-        when = _safe_web_text(when_raw)
+        player = _render_player_link(player_raw)
         score_text = _safe_web_text(_format_score(score if isinstance(score, int) else None), fallback="-")
         tier = _safe_web_text(row.get("tier"))
         ttype = _safe_web_text(utils.title_case_type(str(row.get("type") or "")))
@@ -487,10 +508,9 @@ def _render_rows(rows: list[dict]) -> str:
             f"<td class=\"tank-name\" data-label=\"Tank\">{tank}</td>"
             f"<td class=\"score\" data-label=\"Damage\">{score_text}</td>"
             f"<td class=\"player-name\" data-label=\"Player\">{player}</td>"
-            f"<td class=\"hide-sm muted\" data-label=\"Updated\">{when}</td>"
             "</tr>"
             "<tr class=\"row-detail\">"
-            f"<td colspan=\"4\">Updated: {when} • Tier {tier} • {ttype}</td>"
+            f"<td colspan=\"3\">Tier {tier} • {ttype}</td>"
             "</tr>"
         )
     return "".join(out)
@@ -518,7 +538,6 @@ def _render_player_rows(rows: list[dict]) -> str:
         ttype = _safe_web_text(utils.title_case_type(str(row.get("type") or "")))
         tier = _safe_web_text(row.get("tier"))
         score = row.get("score")
-        when = _safe_web_text(utils.fmt_utc(row.get("created_at")))
         score_text = _safe_web_text(_format_score(score if isinstance(score, int) else None), fallback="-")
         out.append(
             "<tr class=\"data-row\" data-row-toggle=\"1\" tabindex=\"0\">"
@@ -526,10 +545,9 @@ def _render_player_rows(rows: list[dict]) -> str:
             f"<td data-label=\"Type\">{ttype}</td>"
             f"<td data-label=\"Tier\">{tier}</td>"
             f"<td class=\"score\" data-label=\"Damage\">{score_text}</td>"
-            f"<td class=\"hide-sm muted\" data-label=\"Updated\">{when}</td>"
             "</tr>"
             "<tr class=\"row-detail\">"
-            f"<td colspan=\"5\">Type: {ttype} • Tier {tier} • Updated: {when}</td>"
+            f"<td colspan=\"4\">Type: {ttype} • Tier {tier}</td>"
             "</tr>"
         )
     return "".join(out)
@@ -539,7 +557,7 @@ def _render_player_blocks(rows: list[dict]) -> str:
     grouped = _group_rows_by_player(rows)
     out: list[str] = []
     for player in sorted(grouped.keys(), key=lambda p: p.casefold()):
-        safe_player = _safe_web_text(player)
+        safe_player = _render_player_link(player)
         safe_player_key = _safe_web_text(player.casefold(), quote=True)
         player_rows = grouped[player]
         tank_count = len(player_rows)
@@ -557,9 +575,8 @@ def _render_player_blocks(rows: list[dict]) -> str:
                 "<col class=\"col-p-type\" />"
                 "<col class=\"col-p-tier\" />"
                 "<col class=\"col-p-score\" />"
-                "<col class=\"col-p-updated\" />"
                 "</colgroup>",
-                "<thead><tr><th>Tank</th><th>Type</th><th>Tier</th><th class=\"score-head\">Damage</th><th class=\"hide-sm\">Updated</th></tr></thead>",
+                "<thead><tr><th>Tank</th><th>Type</th><th>Tier</th><th class=\"score-head\">Damage</th></tr></thead>",
                 f"<tbody>{_render_player_rows(player_rows)}</tbody>",
                 "</table>",
                 "</div>",
@@ -594,7 +611,7 @@ def _render_stats_top_per_tier(rows: list[tuple[int, int, str, str, int]]) -> st
                 "<tr>"
                 f"<td class=\"stats-rank\">{rank}</td>"
                 f"<td class=\"stats-score\">{_safe_web_text(_format_score(score), fallback='-')}</td>"
-                f"<td class=\"player-name\">{_safe_web_text(player_name)}</td>"
+                f"<td class=\"player-name\">{_render_player_link(player_name)}</td>"
                 f"<td class=\"tank-name\">{_safe_web_text(tank_name)}</td>"
                 "</tr>"
             )
@@ -641,6 +658,98 @@ def _render_stats_time(rows: list[tuple[str, int]], label: str) -> str:
         out.append("<tr><td class=\"muted\" colspan=\"2\">No data</td></tr>")
     out.extend(["</tbody>", "</table>"])
     return "".join(out)
+
+
+def _render_wg_server_status(rows: list[tuple[str, str]], error: str | None) -> str:
+    if error:
+        return f"<p class=\"muted\">{_safe_web_text(error)}</p>"
+
+    out: list[str] = [
+        "<table class=\"stats-table\">",
+        "<thead><tr><th>Server</th><th class=\"stats-count\">Status</th></tr></thead>",
+        "<tbody>",
+    ]
+    for server_name, status in rows:
+        out.append(
+            "<tr>"
+            f"<td>{_safe_web_text(server_name)}</td>"
+            f"<td class=\"stats-count\">{_safe_web_text(status)}</td>"
+            "</tr>"
+        )
+    if not rows:
+        out.append("<tr><td class=\"muted\" colspan=\"2\">No server data</td></tr>")
+    out.extend(["</tbody>", "</table>"])
+    return "".join(out)
+
+
+async def _fetch_wg_server_status() -> tuple[list[tuple[str, str]], str | None]:
+    if not config.WG_API_APPLICATION_ID:
+        return [], "WG server info unavailable: WG_API_APPLICATION_ID not configured."
+
+    region = (config.WG_API_REGION or "eu").strip().lower()
+    region_domain = {
+        "eu": "eu",
+        "na": "com",
+        "com": "com",
+        "asia": "asia",
+    }.get(region, "eu")
+    # WG servers/info endpoint is hosted under worldoftanks and returns per-game arrays
+    # (wotb, wot, wows). We select configured game from response payload.
+    url = f"https://api.worldoftanks.{region_domain}/wgn/servers/info/"
+    timeout = aiohttp.ClientTimeout(total=config.WG_API_TIMEOUT_SECONDS)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, params={"application_id": config.WG_API_APPLICATION_ID}) as resp:
+                if resp.status != 200:
+                    return [], f"WG server info unavailable: HTTP {resp.status}."
+                payload = await resp.json(content_type=None)
+    except Exception as exc:
+        log.warning("WG server info fetch failed (%s): %s", url, exc)
+        return [], f"WG server info unavailable: {type(exc).__name__}."
+
+    if payload.get("status") != "ok":
+        err = payload.get("error") or {}
+        msg = str(err.get("message") or "unknown WG API error")
+        return [], f"WG server info unavailable: {msg}."
+
+    data = payload.get("data") or {}
+    game = (config.WG_API_GAME or "wotb").strip().lower()
+    entries = data.get(game)
+    rows: list[tuple[str, str]] = []
+    if isinstance(entries, list):
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            server_name = str(item.get("server") or "unknown")
+            online = item.get("players_online")
+            if online is None:
+                status = "n/a"
+            else:
+                try:
+                    status = f"{int(online):,} online"
+                except Exception:
+                    status = f"{online} online"
+            rows.append((server_name, status))
+        rows.sort(key=lambda r: r[0].casefold())
+    elif isinstance(entries, dict):
+        for server_name, info in sorted(entries.items(), key=lambda kv: str(kv[0]).casefold()):
+            if isinstance(info, dict):
+                online = info.get("players_online")
+                if online is not None:
+                    try:
+                        status = f"{int(online):,} online"
+                    except Exception:
+                        status = f"{online} online"
+                else:
+                    status = str(info.get("status") or "n/a")
+            else:
+                status = str(info)
+            rows.append((str(server_name), status))
+
+    if not rows:
+        return [], f"WG server info unavailable: no '{game}' server entries."
+
+    return rows, None
 
 
 def _build_script() -> str:
@@ -914,6 +1023,7 @@ def _render_html(
     unique_player_count: int,
     yearly_rows: list[tuple[str, int]],
     monthly_rows: list[tuple[str, int]],
+    wg_servers_html: str,
     data_blob: str,
 ) -> str:
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -1008,6 +1118,10 @@ def _render_html(
             "</div>",
             "</div>",
             "<div class=\"stats-card stats-card-wide\">",
+            "<h3 class=\"stats-title\">WG Server Status</h3>",
+            wg_servers_html,
+            "</div>",
+            "<div class=\"stats-card stats-card-wide\">",
             "<h3 class=\"stats-title\">Recent Damage Changes</h3>",
             "<div data-recent-changes></div>",
             "</div>",
@@ -1038,14 +1152,12 @@ def _render_html(
             title = _safe_web_text(utils.title_case_type(ttype))
             rows = tier_block[ttype]
             row_count = len(rows)
-            last_updated = _latest_created_at(rows)
-            last_updated_text = _safe_web_text(utils.fmt_utc(last_updated)) if last_updated else "—"
             content.extend(
                 [
                     f"<details class=\"type-block\" data-type=\"{_safe_web_text(ttype, quote=True)}\" open>",
                     "<summary class=\"type-head\">",
                     f"<div class=\"type-title\"><span class=\"badge\">{title}</span></div>",
-                    f"<span class=\"type-count\">{row_count} tanks • Updated {last_updated_text}</span>",
+                    f"<span class=\"type-count\">{row_count} tanks</span>",
                     "</summary>",
                     "<div class=\"table-wrap\">",
                     "<table>",
@@ -1053,9 +1165,8 @@ def _render_html(
                     "<col class=\"col-tank\" />"
                     "<col class=\"col-score\" />"
                     "<col class=\"col-player\" />"
-                    "<col class=\"col-updated\" />"
                     "</colgroup>",
-                    "<thead><tr><th>Tank</th><th class=\"score-head\">Damage</th><th>Player</th><th class=\"hide-sm\">Updated</th></tr></thead>",
+                    "<thead><tr><th>Tank</th><th class=\"score-head\">Damage</th><th>Player</th></tr></thead>",
                     f"<tbody>{_render_rows(rows)}</tbody>",
                     "</table>",
                     "</div>",
@@ -1105,6 +1216,7 @@ async def generate_leaderboard_page() -> str | None:
     yearly_rows = await db.stats_submissions_by_year()
     monthly_rows = await db.stats_submissions_by_month()
     recent_changes_rows = await db.score_changes(limit=10)
+    wg_server_rows, wg_server_error = await _fetch_wg_server_status()
     grouped: dict[int, dict[str, list[dict]]] = defaultdict(dict)
     player_rows: list[dict] = []
     seen_buckets: set[tuple[int, str]] = set()
@@ -1177,6 +1289,7 @@ async def generate_leaderboard_page() -> str | None:
         unique_player_count=unique_player_count,
         yearly_rows=yearly_rows,
         monthly_rows=monthly_rows,
+        wg_servers_html=_render_wg_server_status(wg_server_rows, wg_server_error),
         data_blob=_json_for_html(data_payload),
     )
     output_path = Path(config.WEB_OUTPUT_PATH)
