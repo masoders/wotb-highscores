@@ -4,16 +4,12 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from html import escape
 import json
-import logging
 from pathlib import Path
 from urllib.parse import quote
-
-import aiohttp
 
 from . import config, db, utils
 
 TYPE_ORDER = {"heavy": 0, "medium": 1, "light": 2, "td": 3}
-log = logging.getLogger(__name__)
 
 
 def _safe_web_text(value: object, *, fallback: str = "—", quote: bool = False) -> str:
@@ -24,6 +20,16 @@ def _safe_web_text(value: object, *, fallback: str = "—", quote: bool = False)
     # Neutralize mention-like strings for safer sharing/copying contexts.
     cleaned = cleaned.replace("@", "@\u200b")
     return escape(cleaned, quote=quote)
+
+
+def _safe_web_multiline(value: object, *, fallback: str = "—") -> str:
+    raw = str(value) if value is not None else fallback
+    if not raw:
+        raw = fallback
+    # Allow escaped newlines from .env values (e.g. "\\n") and real newlines.
+    text = raw.replace("\\n", "\n")
+    parts = text.split("\n")
+    return "<br>".join(_safe_web_text(part, fallback="", quote=False) for part in parts)
 
 
 def _json_for_html(obj: object) -> str:
@@ -377,6 +383,7 @@ th {
 }
 tbody tr:hover { background: #253a5a66; }
 .data-row { cursor: pointer; }
+.data-row.latest-submission td { font-weight: 700; }
 .row-detail { display: none; }
 .row-detail td {
   white-space: normal;
@@ -494,7 +501,22 @@ def _render_player_link(player_name: str) -> str:
 
 def _render_rows(rows: list[dict]) -> str:
     out: list[str] = []
-    for row in rows:
+    latest_idx = -1
+    latest_key: tuple[str, int, str] | None = None
+    for i, row in enumerate(rows):
+        if bool(row.get("is_imported")):
+            continue
+        created_at = str(row.get("created_at") or "")
+        if not created_at:
+            continue
+        tie_score = int(row.get("score")) if isinstance(row.get("score"), int) else -1
+        tie_tank = str(row.get("tank_name") or "")
+        key = (created_at, tie_score, tie_tank)
+        if latest_key is None or key > latest_key:
+            latest_key = key
+            latest_idx = i
+
+    for i, row in enumerate(rows):
         tank = _safe_web_text(row.get("tank_name"), fallback="Unknown")
         score = row.get("score")
         player_raw = str(row.get("player_name") or "—")
@@ -503,8 +525,14 @@ def _render_rows(rows: list[dict]) -> str:
         tier = _safe_web_text(row.get("tier"))
         ttype = _safe_web_text(utils.title_case_type(str(row.get("type") or "")))
         player_key = _safe_web_text(player_raw.casefold(), quote=True)
+        is_latest = i == latest_idx
+        row_class = "data-row latest-submission" if is_latest else "data-row"
+        if is_latest:
+            tank = f"<strong>{tank}</strong>"
+            score_text = f"<strong>{score_text}</strong>"
+            player = f"<strong>{player}</strong>"
         out.append(
-            f"<tr class=\"data-row\" data-row-toggle=\"1\" data-player-key=\"{player_key}\" tabindex=\"0\">"
+            f"<tr class=\"{row_class}\" data-row-toggle=\"1\" data-player-key=\"{player_key}\" tabindex=\"0\">"
             f"<td class=\"tank-name\" data-label=\"Tank\">{tank}</td>"
             f"<td class=\"score\" data-label=\"Damage\">{score_text}</td>"
             f"<td class=\"player-name\" data-label=\"Player\">{player}</td>"
@@ -533,14 +561,35 @@ def _render_player_rows(rows: list[dict]) -> str:
             str(r.get("tank_name") or "").casefold(),
         ),
     )
-    for row in sorted_rows:
+    latest_idx = -1
+    latest_key: tuple[str, int, str] | None = None
+    for i, row in enumerate(sorted_rows):
+        if bool(row.get("is_imported")):
+            continue
+        created_at = str(row.get("created_at") or "")
+        if not created_at:
+            continue
+        tie_score = int(row.get("score")) if isinstance(row.get("score"), int) else -1
+        tie_tank = str(row.get("tank_name") or "")
+        key = (created_at, tie_score, tie_tank)
+        if latest_key is None or key > latest_key:
+            latest_key = key
+            latest_idx = i
+
+    for i, row in enumerate(sorted_rows):
         tank = _safe_web_text(row.get("tank_name"), fallback="Unknown")
         ttype = _safe_web_text(utils.title_case_type(str(row.get("type") or "")))
         tier = _safe_web_text(row.get("tier"))
         score = row.get("score")
         score_text = _safe_web_text(_format_score(score if isinstance(score, int) else None), fallback="-")
+        row_class = "data-row latest-submission" if i == latest_idx else "data-row"
+        if i == latest_idx:
+            tank = f"<strong>{tank}</strong>"
+            ttype = f"<strong>{ttype}</strong>"
+            tier = f"<strong>{tier}</strong>"
+            score_text = f"<strong>{score_text}</strong>"
         out.append(
-            "<tr class=\"data-row\" data-row-toggle=\"1\" tabindex=\"0\">"
+            f"<tr class=\"{row_class}\" data-row-toggle=\"1\" tabindex=\"0\">"
             f"<td class=\"tank-name\" data-label=\"Tank\">{tank}</td>"
             f"<td data-label=\"Type\">{ttype}</td>"
             f"<td data-label=\"Tier\">{tier}</td>"
@@ -658,98 +707,6 @@ def _render_stats_time(rows: list[tuple[str, int]], label: str) -> str:
         out.append("<tr><td class=\"muted\" colspan=\"2\">No data</td></tr>")
     out.extend(["</tbody>", "</table>"])
     return "".join(out)
-
-
-def _render_wg_server_status(rows: list[tuple[str, str]], error: str | None) -> str:
-    if error:
-        return f"<p class=\"muted\">{_safe_web_text(error)}</p>"
-
-    out: list[str] = [
-        "<table class=\"stats-table\">",
-        "<thead><tr><th>Server</th><th class=\"stats-count\">Status</th></tr></thead>",
-        "<tbody>",
-    ]
-    for server_name, status in rows:
-        out.append(
-            "<tr>"
-            f"<td>{_safe_web_text(server_name)}</td>"
-            f"<td class=\"stats-count\">{_safe_web_text(status)}</td>"
-            "</tr>"
-        )
-    if not rows:
-        out.append("<tr><td class=\"muted\" colspan=\"2\">No server data</td></tr>")
-    out.extend(["</tbody>", "</table>"])
-    return "".join(out)
-
-
-async def _fetch_wg_server_status() -> tuple[list[tuple[str, str]], str | None]:
-    if not config.WG_API_APPLICATION_ID:
-        return [], "WG server info unavailable: WG_API_APPLICATION_ID not configured."
-
-    region = (config.WG_API_REGION or "eu").strip().lower()
-    region_domain = {
-        "eu": "eu",
-        "na": "com",
-        "com": "com",
-        "asia": "asia",
-    }.get(region, "eu")
-    # WG servers/info endpoint is hosted under worldoftanks and returns per-game arrays
-    # (wotb, wot, wows). We select configured game from response payload.
-    url = f"https://api.worldoftanks.{region_domain}/wgn/servers/info/"
-    timeout = aiohttp.ClientTimeout(total=config.WG_API_TIMEOUT_SECONDS)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, params={"application_id": config.WG_API_APPLICATION_ID}) as resp:
-                if resp.status != 200:
-                    return [], f"WG server info unavailable: HTTP {resp.status}."
-                payload = await resp.json(content_type=None)
-    except Exception as exc:
-        log.warning("WG server info fetch failed (%s): %s", url, exc)
-        return [], f"WG server info unavailable: {type(exc).__name__}."
-
-    if payload.get("status") != "ok":
-        err = payload.get("error") or {}
-        msg = str(err.get("message") or "unknown WG API error")
-        return [], f"WG server info unavailable: {msg}."
-
-    data = payload.get("data") or {}
-    game = (config.WG_API_GAME or "wotb").strip().lower()
-    entries = data.get(game)
-    rows: list[tuple[str, str]] = []
-    if isinstance(entries, list):
-        for item in entries:
-            if not isinstance(item, dict):
-                continue
-            server_name = str(item.get("server") or "unknown")
-            online = item.get("players_online")
-            if online is None:
-                status = "n/a"
-            else:
-                try:
-                    status = f"{int(online):,} online"
-                except Exception:
-                    status = f"{online} online"
-            rows.append((server_name, status))
-        rows.sort(key=lambda r: r[0].casefold())
-    elif isinstance(entries, dict):
-        for server_name, info in sorted(entries.items(), key=lambda kv: str(kv[0]).casefold()):
-            if isinstance(info, dict):
-                online = info.get("players_online")
-                if online is not None:
-                    try:
-                        status = f"{int(online):,} online"
-                    except Exception:
-                        status = f"{online} online"
-                else:
-                    status = str(info.get("status") or "n/a")
-            else:
-                status = str(info)
-            rows.append((str(server_name), status))
-
-    if not rows:
-        return [], f"WG server info unavailable: no '{game}' server entries."
-
-    return rows, None
 
 
 def _build_script() -> str:
@@ -1011,6 +968,7 @@ def _build_script() -> str:
 def _render_html(
     clan_name: str,
     clan_motto: str | None,
+    clan_description: str | None,
     banner_url: str | None,
     clan_name_align: str,
     font_family: str,
@@ -1023,7 +981,6 @@ def _render_html(
     unique_player_count: int,
     yearly_rows: list[tuple[str, int]],
     monthly_rows: list[tuple[str, int]],
-    wg_servers_html: str,
     data_blob: str,
 ) -> str:
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -1056,7 +1013,8 @@ def _render_html(
         banner,
         f"<div class=\"hero-content {safe_align}\">",
         f"<h1>{_safe_web_text(clan_name)}</h1>",
-        (f"<p class=\"meta\">{_safe_web_text(clan_motto)}</p>" if clan_motto else ""),
+        (f"<p class=\"meta\">{_safe_web_multiline(clan_motto)}</p>" if clan_motto else ""),
+        (f"<p class=\"meta\">{_safe_web_multiline(clan_description)}</p>" if clan_description else ""),
         "</div>",
         "</section>",
         "<h2 class=\"section-title\">Leaderboard</h2>",
@@ -1116,10 +1074,6 @@ def _render_html(
             "<h3 class=\"stats-title\">Submissions Per Month</h3>",
             _render_stats_time(monthly_rows, "Month"),
             "</div>",
-            "</div>",
-            "<div class=\"stats-card stats-card-wide\">",
-            "<h3 class=\"stats-title\">WG Server Status</h3>",
-            wg_servers_html,
             "</div>",
             "<div class=\"stats-card stats-card-wide\">",
             "<h3 class=\"stats-title\">Recent Damage Changes</h3>",
@@ -1216,7 +1170,6 @@ async def generate_leaderboard_page() -> str | None:
     yearly_rows = await db.stats_submissions_by_year()
     monthly_rows = await db.stats_submissions_by_month()
     recent_changes_rows = await db.score_changes(limit=10)
-    wg_server_rows, wg_server_error = await _fetch_wg_server_status()
     grouped: dict[int, dict[str, list[dict]]] = defaultdict(dict)
     player_rows: list[dict] = []
     seen_buckets: set[tuple[int, str]] = set()
@@ -1268,6 +1221,7 @@ async def generate_leaderboard_page() -> str | None:
     html = _render_html(
         clan_name=clan_name_raw,
         clan_motto=(config.WEB_CLAN_MOTTO or "").strip() or None,
+        clan_description=(config.WEB_CLAN_DESCRIPTION or "").strip() or None,
         banner_url=config.WEB_BANNER_URL or None,
         clan_name_align=config.WEB_CLAN_NAME_ALIGN,
         font_family=font_family,
@@ -1289,7 +1243,6 @@ async def generate_leaderboard_page() -> str | None:
         unique_player_count=unique_player_count,
         yearly_rows=yearly_rows,
         monthly_rows=monthly_rows,
-        wg_servers_html=_render_wg_server_status(wg_server_rows, wg_server_error),
         data_blob=_json_for_html(data_payload),
     )
     output_path = Path(config.WEB_OUTPUT_PATH)

@@ -11,7 +11,7 @@ def _safe_text(value: object, *, fallback: str = "—") -> str:
     raw = str(value) if value is not None else fallback
     if not raw:
         raw = fallback
-    return discord.utils.escape_markdown(discord.utils.escape_mentions(raw))
+    return discord.utils.escape_mentions(raw)
 
 
 def _split_into_pages(header_lines: list[str], table_lines: list[str], footer_lines: list[str], max_len: int = 1900) -> list[str]:

@@ -1650,7 +1650,18 @@ async def get_champion_filtered(tier: int | None = None, ttype: str | None = Non
 
 async def best_per_tank_for_bucket(tier: int, type_: str):
     sql = """
-    WITH ranked AS (
+    WITH latest_change AS (
+      SELECT
+        sc.submission_id,
+        sc.details,
+        ROW_NUMBER() OVER (
+          PARTITION BY sc.submission_id
+          ORDER BY sc.id DESC
+        ) AS rn
+      FROM score_changes sc
+      WHERE sc.submission_id IS NOT NULL
+    ),
+    ranked AS (
       SELECT
         s.*,
         ROW_NUMBER() OVER (
@@ -1665,10 +1676,16 @@ async def best_per_tank_for_bucket(tier: int, type_: str):
       t.type AS type,
       r.score AS score,
       r.player_name_raw AS player_name,
-      r.created_at AS created_at
+      r.created_at AS created_at,
+      CASE
+        WHEN lc.details LIKE 'bulk-import%' THEN 1
+        ELSE 0
+      END AS is_imported
     FROM tanks t
     LEFT JOIN ranked r
       ON r.tank_name = t.name AND r.rn = 1
+    LEFT JOIN latest_change lc
+      ON lc.submission_id = r.id AND lc.rn = 1
     WHERE t.tier = ? AND t.type = ?
     ORDER BY (r.score IS NULL) ASC, r.score DESC, t.name ASC
     """
