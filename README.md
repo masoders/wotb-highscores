@@ -3,6 +3,7 @@
 This bot maintains:
 - a **global highscore leaderboard** (filterable by tier/type)
 - an **admin-governed tank roster** stored in SQLite
+- a **WG clan player sync** (daily + manual refresh) for player-name tracking/autocomplete
 - a **static leaderboard webpage** (Tier -> Type -> Tank) regenerated on updates
 - an **indexed Forum channel** with one thread per Tier+Type:
   - canonical thread titles enforced
@@ -42,26 +43,40 @@ GUILD_ID=YOUR_GUILD_ID
 ANNOUNCE_CHANNEL_ID=CHANNEL_FOR_CHAMPION_ANNOUNCEMENTS
 AUDIT_LOG_CHANNEL_ID=PRIVATE_LOG_CHANNEL_ID
 TANK_INDEX_FORUM_CHANNEL_ID=FORUM_CHANNEL_ID
+BACKUP_CHANNEL_ID=BACKUP_CHANNEL_ID
 COMMANDER_ROLE_ID=ROLE_ID
 COMMANDER_ROLE_NAME=Clan Commander
 MAX_SCORE=100000
 DB_PATH=highscores.db
-TANKS_SEED_CSV_PATH=tanks.csv
+
+WG_API_APPLICATION_ID=YOUR_WG_APP_ID
+WG_API_GAME=wotb
+WG_API_REGION=eu
+WG_CLAN_IDS=1172,72484
+WG_REFRESH_HOUR=4
+WG_REFRESH_MINUTE=0
+WG_REFRESH_TZ=Europe/Helsinki
+WG_API_TIMEOUT_SECONDS=15
+
+BACKUP_WEEKDAY=6
+BACKUP_HOUR=3
+BACKUP_MINUTE=0
+BACKUP_TZ=Europe/Helsinki
 ```
 
 `COMMANDER_ROLE_ID` takes precedence; `COMMANDER_ROLE_NAME` is used only when `COMMANDER_ROLE_ID=0`.
 
-## First run seeding (CSV seed-only)
-If `tanks` table is empty, the bot will seed tanks from `tanks.csv` (header: name,tier,type).
-After that, the roster is DB-only (managed via commands).
+## WG Player Sync
+Configure WG API and one or more clan IDs in `.env`.
 
-Example `tanks.csv`:
-```csv
-name,tier,type
-Tiger II,8,heavy
-Leopard 1,10,medium
-SU-100,6,td
-```
+What it does:
+- refreshes tracked clan players once per day automatically
+- allows commanders to force refresh with `/highscore refresh_players`
+- removes players who left tracked clans
+- stores renamed players as canonical names
+- powers player-name autocomplete in score commands
+
+If you want health output and schedules to look local, set `WG_REFRESH_TZ` and `BACKUP_TZ` to your local timezone.
 
 ## Commands
 See `docs.md`.
@@ -88,9 +103,10 @@ BACKUP_MINUTE=0
 BACKUP_TZ=Europe/Helsinki
 ```
 
-Admin commands:
+Commander commands:
 - `/backup run_now`
 - `/backup status`
+- `/backup verify_latest`
 
 ```env
 BACKUP_GUILD_ID=   # Optional admin/backup server ID

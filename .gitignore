@@ -27,3 +27,6 @@ web/
 # OS / editor files
 .DS_Store
 .vscode/
+
+# Local tool metadata
+.tools/

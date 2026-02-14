@@ -36,6 +36,11 @@ Minimum required:
 - BACKUP_CHANNEL_ID
 - TANK_INDEX_FORUM_CHANNEL_ID
 
+Optional WG player tracking:
+- WG_API_APPLICATION_ID
+- WG_API_REGION
+- WG_CLAN_IDS
+
 ## 4. First run
 ```bash
 python bot.py
@@ -51,6 +56,11 @@ python bot.py
 ```text
 /backup run_now
 /backup verify_latest
+```
+
+## 7. (Optional) Verify WG player sync
+```text
+/highscore refresh_players
 ```
 
 You are live.
