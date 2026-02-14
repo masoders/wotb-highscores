@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -49,3 +50,47 @@ _web_clan_name_align = os.getenv("WEB_CLAN_NAME_ALIGN", "center").strip().lower(
 WEB_CLAN_NAME_ALIGN = _web_clan_name_align if _web_clan_name_align in {"center", "left"} else "center"
 _web_font_mode = os.getenv("WEB_FONT_MODE", "sans").strip().lower()
 WEB_FONT_MODE = _web_font_mode if _web_font_mode in {"sans", "monospace"} else "sans"
+
+
+def _web_hex_color(key: str, default: str) -> str:
+    value = os.getenv(key, default).strip()
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        return value
+    return default
+
+
+WEB_BG_COLOR = _web_hex_color("WEB_BG_COLOR", "#0b1221")
+WEB_FONT_COLOR = _web_hex_color("WEB_FONT_COLOR", "#ecf1ff")
+WEB_DAMAGE_COLOR = _web_hex_color("WEB_DAMAGE_COLOR", "#6ef0b6")
+WEB_TANK_NAME_COLOR = _web_hex_color("WEB_TANK_NAME_COLOR", "#ecf1ff")
+WEB_PLAYER_NAME_COLOR = _web_hex_color("WEB_PLAYER_NAME_COLOR", "#ecf1ff")
+WEB_CLAN_NAME_COLOR = _web_hex_color("WEB_CLAN_NAME_COLOR", "#ecf1ff")
+WEB_MOTTO_COLOR = _web_hex_color("WEB_MOTTO_COLOR", "#adc0ea")
+WEB_LEADERBOARD_COLOR = _web_hex_color("WEB_LEADERBOARD_COLOR", "#f1f6ff")
+
+
+def _csv_ints(value: str) -> list[int]:
+    out: list[int] = []
+    for raw in (value or "").split(","):
+        item = raw.strip()
+        if not item:
+            continue
+        try:
+            out.append(int(item))
+        except Exception:
+            continue
+    return out
+
+
+# Wargaming API clan sync
+WG_API_APPLICATION_ID = os.getenv("WG_API_APPLICATION_ID", "").strip()
+_wg_game = os.getenv("WG_API_GAME", "wotb").strip().lower()
+WG_API_GAME = _wg_game if _wg_game in {"wot", "wotb"} else "wotb"
+_wg_region = os.getenv("WG_API_REGION", "eu").strip().lower()
+WG_API_REGION = _wg_region if _wg_region in {"eu", "na", "com", "asia"} else "eu"
+WG_CLAN_IDS = _csv_ints(os.getenv("WG_CLAN_IDS", ""))
+WG_REFRESH_HOUR = max(0, min(23, int(os.getenv("WG_REFRESH_HOUR", "4"))))
+WG_REFRESH_MINUTE = max(0, min(59, int(os.getenv("WG_REFRESH_MINUTE", "0"))))
+WG_REFRESH_TZ = os.getenv("WG_REFRESH_TZ", "UTC").strip() or "UTC"
+WG_API_TIMEOUT_SECONDS = max(5, min(60, int(os.getenv("WG_API_TIMEOUT_SECONDS", "15"))))
+WG_SYNC_ENABLED = bool(WG_API_APPLICATION_ID and WG_CLAN_IDS)

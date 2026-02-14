@@ -22,9 +22,13 @@ from .utils import fmt_utc, utc_now_z
 _last_backup_utc: str | None = None
 _last_backup_ok: bool | None = None
 _last_backup_msg: str | None = None
+_last_scheduled_backup_utc: str | None = None
 
 def last_backup_status():
     return _last_backup_utc, _last_backup_ok, _last_backup_msg
+
+def last_scheduled_backup_utc() -> str | None:
+    return _last_scheduled_backup_utc
 
 def _derive_fernet():
     if not config.BACKUP_ENCRYPTION_PASSPHRASE:
@@ -127,7 +131,7 @@ def get_backup_guild(bot: discord.Client, interaction: discord.Interaction | Non
 
 @tasks.loop(minutes=1)
 async def weekly_backup_loop(bot: discord.Client):
-    global _last_backup_utc, _last_backup_ok, _last_backup_msg
+    global _last_backup_utc, _last_backup_ok, _last_backup_msg, _last_scheduled_backup_utc
 
     if config.BACKUP_CHANNEL_ID == 0:
         return
@@ -142,6 +146,11 @@ async def weekly_backup_loop(bot: discord.Client):
         return
 
     weekly_backup_loop.next_run = next_weekly_run(now_local + dt.timedelta(seconds=1))
+    _last_scheduled_backup_utc = utc_now_z()
+    try:
+        await db.set_sync_state("backup:last_scheduled", _last_scheduled_backup_utc, _last_scheduled_backup_utc)
+    except Exception:
+        log.exception("Failed to persist backup:last_scheduled")
 
     guild = get_backup_guild(bot, None)
     if guild is None:
@@ -168,8 +177,20 @@ async def weekly_backup_loop(bot: discord.Client):
             msg += f"\n- {note}"
         await channel.send(content=msg, file=discord.File(path, filename=fname))
         _last_backup_utc, _last_backup_ok, _last_backup_msg = utc_now_z(), True, fname
+        try:
+            await db.set_sync_state("backup:last", _last_backup_utc, _last_backup_utc)
+            await db.set_sync_state("backup:last_ok", "1", _last_backup_utc)
+            await db.set_sync_state("backup:last_msg", _last_backup_msg, _last_backup_utc)
+        except Exception:
+            log.exception("Failed to persist backup:last status")
     except Exception as e:
         _last_backup_utc, _last_backup_ok, _last_backup_msg = utc_now_z(), False, f"{type(e).__name__}: {e}"
+        try:
+            await db.set_sync_state("backup:last", _last_backup_utc, _last_backup_utc)
+            await db.set_sync_state("backup:last_ok", "0", _last_backup_utc)
+            await db.set_sync_state("backup:last_msg", _last_backup_msg, _last_backup_utc)
+        except Exception:
+            log.exception("Failed to persist backup:last failure status")
         log.error(f"Backup failed: {type(e).__name__}: {e}")
         try:
             await channel.send(f"❌ Backup failed: `{type(e).__name__}: {e}`")
@@ -184,6 +205,8 @@ async def weekly_backup_loop(bot: discord.Client):
 
 
 async def run_backup_now(bot: discord.Client) -> tuple[bool, str]:
+    global _last_backup_utc, _last_backup_ok, _last_backup_msg
+
     if config.BACKUP_CHANNEL_ID == 0:
         return False, "BACKUP_CHANNEL_ID is not set."
 
@@ -211,8 +234,22 @@ async def run_backup_now(bot: discord.Client) -> tuple[bool, str]:
         if note:
             msg += f"\n- {note}"
         await channel.send(content=msg, file=discord.File(path, filename=fname))
+        _last_backup_utc, _last_backup_ok, _last_backup_msg = utc_now_z(), True, fname
+        try:
+            await db.set_sync_state("backup:last", _last_backup_utc, _last_backup_utc)
+            await db.set_sync_state("backup:last_ok", "1", _last_backup_utc)
+            await db.set_sync_state("backup:last_msg", _last_backup_msg, _last_backup_utc)
+        except Exception:
+            log.exception("Failed to persist backup:last status")
         return True, f"Posted `{fname}` to backup channel."
     except Exception as e:
+        _last_backup_utc, _last_backup_ok, _last_backup_msg = utc_now_z(), False, f"{type(e).__name__}: {e}"
+        try:
+            await db.set_sync_state("backup:last", _last_backup_utc, _last_backup_utc)
+            await db.set_sync_state("backup:last_ok", "0", _last_backup_utc)
+            await db.set_sync_state("backup:last_msg", _last_backup_msg, _last_backup_utc)
+        except Exception:
+            log.exception("Failed to persist backup:last failure status")
         return False, f"Backup failed: {type(e).__name__}: {e}"
     finally:
         try:

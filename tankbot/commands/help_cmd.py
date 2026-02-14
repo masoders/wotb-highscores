@@ -9,30 +9,43 @@ def setup(tree: app_commands.CommandTree, *, guild: discord.abc.Snowflake | None
         is_admin = isinstance(member, discord.Member) and utils.can_manage(member)
         is_commander = isinstance(member, discord.Member) and utils.has_commander_role(member)
 
-        lines = []
-        lines.append("**Tank Highscore Bot — Help**")
-        lines.append("")
-        lines.append("**Public commands:**")
-        lines.append("- `/highscore show` — show current champion")
-        lines.append("- `/highscore history` — recent results + stats")
-        lines.append("- `/highscore qualify` — check if damage would qualify")
-        lines.append("")
+        lines = [
+            "**Tank Highscore Bot — Help**",
+            "",
+            "**Public commands:**",
+            "- `/help` — show this help message",
+            "- `/highscore show` — show champion (global or filtered)",
+            "- `/highscore history` — recent submissions + stats",
+            "- `/highscore qualify` — check if damage would qualify (no submit)",
+            "",
+        ]
 
         if is_commander:
-            lines.append("**Commander commands:**")
-            lines.append("- `/highscore submit|edit|delete` — add or correct damage")
-            lines.append("- `/highscore refresh_web` — regenerate static leaderboard webpage")
-            lines.append("- /highscore import_scores — import historical scores from CSV")
-            lines.append("- `/tank add|edit|remove|list|export_csv|export_scores_csv` — roster updates and export")
-            lines.append("- `/backup …` — backups and status")
-            lines.append("")
+            lines.extend([
+                "**Commander commands:**",
+                "- `/highscore submit` — submit a new highscore",
+                "- `/highscore edit` — edit submission by id (score/player)",
+                "- `/highscore delete` — revert or hard-delete submission by id",
+                "- `/highscore refresh_web` — regenerate static leaderboard webpage",
+                "- `/highscore refresh_players` — refresh WG clan player list now",
+                "- `/tank add|edit|remove|rename|list` — manage roster",
+                "- `/tank export_csv|export_scores_csv` — export roster/scores CSV",
+                "- `/backup run_now|status|verify_latest` — backup operations",
+                "",
+            ])
 
         if is_admin:
-            lines.append("**Admin commands:**")
-            lines.append("- `/highscore changes` — damage audit trail")
-            lines.append("- `/tank changes|preview_import|import_csv|rebuild_index...` — advanced tank admin")
-            lines.append("- `/system health` — system health")
-            lines.append("")
+            lines.extend([
+                "**Admin commands (Manage Server):**",
+                "- `/highscore import_scores` — import historical scores CSV",
+                "- `/highscore changes` — damage audit trail",
+                "- `/tank alias_add|alias_list|alias_seed_common` — alias management",
+                "- `/tank merge` — merge duplicate tank into canonical tank",
+                "- `/tank changes|preview_import|import_csv` — tank audit/import",
+                "- `/tank rebuild_index|rebuild_index_missing` — forum index rebuild/repair",
+                "- `/system health|reload` — runtime health + command reload",
+                "",
+            ])
 
         lines.append("_Commands shown depend on your permissions._")
         await interaction.response.send_message("\n".join(lines), ephemeral=True)

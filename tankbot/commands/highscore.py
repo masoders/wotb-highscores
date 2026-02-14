@@ -3,7 +3,7 @@ from discord import app_commands
 from datetime import datetime, timezone
 import difflib
 import logging
-from .. import config, db, utils, forum_index, static_site, audit_channel
+from .. import config, db, utils, forum_index, static_site, audit_channel, wg_sync
 
 grp = app_commands.Group(name="highscore", description="Highscore commands")
 logger = logging.getLogger(__name__)
@@ -77,6 +77,15 @@ async def _resolve_tank_for_storage(tank_input: str) -> tuple[tuple[str, int, st
 
 def _format_audit_score(value: int | None) -> str:
     return "—" if value is None else str(int(value))
+
+def _format_name_block(title: str, names: list[str], *, max_names: int = 20) -> str:
+    if not names:
+        return f"{title}: **0**"
+    shown = names[:max_names]
+    text = ", ".join([f"**{n}**" for n in shown])
+    if len(names) > max_names:
+        text += f", ... (+{len(names) - max_names} more)"
+    return f"{title}: **{len(names)}**\n{text}"
 
 @grp.command(name="import_scores", description="Import historical scores from CSV (admins only)")
 @app_commands.describe(
@@ -483,6 +492,11 @@ async def edit(interaction: discord.Interaction, submission_id: int, score: int,
         ephemeral=True,
     )
 
+@edit.autocomplete("player")
+async def edit_player_autocomplete(_interaction: discord.Interaction, current: str):
+    names = await db.list_player_names(query=current, limit=25)
+    return [app_commands.Choice(name=n, value=n) for n in names[:25]]
+
 @grp.command(name="delete", description="Revert or hard-delete a submission by id (commanders only)")
 @app_commands.describe(
     submission_id="Submission id from history",
@@ -628,6 +642,11 @@ async def qualify_tank_autocomplete(_interaction: discord.Interaction, current: 
     names = await db.list_tank_names(query=current, limit=25)
     return [app_commands.Choice(name=n, value=n) for n in names[:25]]
 
+@qualify.autocomplete("player")
+async def qualify_player_autocomplete(_interaction: discord.Interaction, current: str):
+    names = await db.list_player_names(query=current, limit=25)
+    return [app_commands.Choice(name=n, value=n) for n in names[:25]]
+
 @grp.command(name="history", description="Show recent submissions (grouped) + stats")
 @app_commands.describe(limit="How many recent entries (1-25)")
 async def history(interaction: discord.Interaction, limit: int = 10):
@@ -686,6 +705,66 @@ async def refresh_web(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True, thinking=True)
     notice = await _refresh_webpage_notice(context="Manual refresh requested, but")
     await interaction.followup.send(notice, ephemeral=True)
+
+@grp.command(name="refresh_players", description="Refresh WG clan player list now (commanders only)")
+async def refresh_players(interaction: discord.Interaction):
+    member = interaction.user
+    if not isinstance(member, discord.Member) or not utils.has_commander_role(member):
+        await interaction.response.send_message("Nope. Only **Clan Commanders** can refresh players.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        result = await wg_sync.sync_now(actor=interaction.user.display_name)
+    except Exception as exc:
+        await interaction.followup.send(
+            f"❌ WG player refresh failed: `{type(exc).__name__}: {exc}`",
+            ephemeral=True,
+        )
+        return
+
+    added_names = [str(n) for n in result.get("added_names", [])]
+    removed_names = [str(n) for n in result.get("removed_names", [])]
+    renamed = [tuple(pair) for pair in result.get("renamed", [])]
+    lines = [
+        "✅ WG player list refreshed.",
+        f"Region: **{result.get('region')}**",
+        f"Clan IDs: `{', '.join([str(c) for c in result.get('clan_ids', [])])}`",
+        f"Tracked players: **{result.get('total', 0)}**",
+        _format_name_block("Added", added_names),
+        _format_name_block("Removed", removed_names),
+        f"Renamed: **{len(renamed)}**",
+    ]
+    per_clan = [dict(row) for row in result.get("per_clan", [])]
+    if per_clan:
+        lines.append("Per-clan fetch:")
+        for row in per_clan[:10]:
+            lines.append(
+                f"- `{row.get('clan_id')}`: **{row.get('count', 0)}** "
+                f"(source: `{row.get('source', 'unknown')}`)"
+            )
+        if len(per_clan) > 10:
+            lines.append(f"- ... (+{len(per_clan) - 10} more)")
+    if renamed:
+        preview = ", ".join([f"**{old}** -> **{new}**" for old, new in renamed[:10]])
+        if len(renamed) > 10:
+            preview += f", ... (+{len(renamed) - 10} more)"
+        lines.append(preview)
+
+    await audit_channel.send(
+        interaction.client,
+        (
+            "🧾 [player refresh] "
+            f"actor={interaction.user.display_name} "
+            f"region={result.get('region')} "
+            f"clans={','.join([str(c) for c in result.get('clan_ids', [])])} "
+            f"total={result.get('total', 0)} "
+            f"added={len(added_names)} "
+            f"removed={len(removed_names)} "
+            f"renamed={len(renamed)}"
+        ),
+    )
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord.Object | None = None):
     tree.add_command(grp, guild=guild)
