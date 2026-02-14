@@ -24,6 +24,7 @@ DISCORD_TOKEN=YOUR_BOT_TOKEN
 GUILD_ID=YOUR_GUILD_ID
 
 TANK_INDEX_FORUM_CHANNEL_ID=YOUR_FORUM_CHANNEL_ID
+TANK_INDEX_NORMAL_CHANNEL_ID=0
 ANNOUNCE_CHANNEL_ID=YOUR_ANNOUNCE_CHANNEL_ID
 BACKUP_CHANNEL_ID=YOUR_BACKUP_CHANNEL_ID
 
@@ -56,6 +57,7 @@ LOG_PATH=tankbot.log
 ```
 
 `COMMANDER_ROLE_ID` takes precedence; `COMMANDER_ROLE_NAME` is used only when `COMMANDER_ROLE_ID=0`.
+If `TANK_INDEX_NORMAL_CHANNEL_ID` is non-zero, index snapshots are also posted in that text channel. If both index channel IDs are set, both destinations are populated.
 
 ## 3) Install dependencies and start
 

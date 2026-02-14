@@ -15,17 +15,16 @@ Legend:
 - `/highscore qualify <tank> <score> [player]`
   - Description: Check if a score would become #1 for that tank (no submission).
   - Example: `/highscore qualify tank:"Tiger II" score:3120 player:"PlayerOne"`
-- `/highscore history [limit]`
-  - Description: Show recent submissions and stats.
-  - Example: `/highscore history limit:10`
-
 ## Commander
 - `/highscore submit <player> <tank> <score>`
   - Description: Submit a new highscore (must beat current tank record). Player names are normalized and existing canonical names are reused.
   - Example: `/highscore submit player:"PlayerOne" tank:"Tiger II" score:3120`
-- `/highscore edit <submission_id> <score>`
-  - Description: Edit an existing submission score by id.
-  - Example: `/highscore edit submission_id:245 score:7210`
+- `/highscore history [limit] [tier] [type]`
+  - Description: Show recent submissions and stats.
+  - Example: `/highscore history limit:10 tier:7 type:light`
+- `/highscore edit <submission_id> [score] [player]`
+  - Description: Edit an existing submission by id (score and/or player name).
+  - Example: `/highscore edit submission_id:245 player:CorrectName`
 - `/highscore delete <submission_id>`
   - Description: Delete an existing submission by id.
   - Example: `/highscore delete submission_id:245`
@@ -81,10 +80,10 @@ Legend:
   - Description: Import tanks from CSV (`name,tier,type`).
   - Example: `/tank import_csv file:tanks.csv`
 - `/tank rebuild_index`
-  - Description: Rebuild all forum index threads.
+  - Description: Rebuild all index snapshots (forum threads or normal channel posts).
   - Example: `/tank rebuild_index`
 - `/tank rebuild_index_missing`
-  - Description: Create/repair missing index threads only.
+  - Description: Create/repair missing index snapshots only.
   - Example: `/tank rebuild_index_missing`
 - `/system health`
   - Description: Show runtime, DB, backup, WG refresh, and dashboard health.
@@ -93,12 +92,12 @@ Legend:
   - Description: Reload command modules and sync slash commands.
   - Example: `/system reload`
 
-# Forum Index Rules
-- One thread per Tier (1..10) + Type (light/medium/heavy/td)
-- Thread title enforced: `Tier N – <Type>`
-- Starter post updated and pinned on changes
-- Thread locked (read-only)
-- Tags enforced: `Tier N` + `<Type>`
+# Index Snapshot Rules
+- One post per Tier (1..10) + Type (light/medium/heavy/td)
+- If `TANK_INDEX_FORUM_CHANNEL_ID` is set: snapshots are posted as forum threads under that forum
+- If `TANK_INDEX_NORMAL_CHANNEL_ID` is set: snapshots are posted as normal messages in that text channel
+- If both are set: both destinations are kept updated
+- Snapshot content is auto-updated on score changes
 
 # Notes
 - If tags can't be created by the API/version, the bot will skip tag creation and still function.

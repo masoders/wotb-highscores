@@ -6,6 +6,46 @@ from . import config, db, utils
 
 _SNAPSHOT_MARKER = "_Snapshot page "
 _SNAPSHOT_MARKER_RE = re.compile(r"(?m)^_?Snapshot page \d+/\d+_?$")
+_SNAPSHOT_PAGE_1_RE = re.compile(r"(?m)^_?Snapshot page 1/\d+_?$")
+_INDEX_TITLE_RE = re.compile(r"(?m)^\*\*.+ — Tier \d+\*\*$")
+
+
+def _bucket_title(tier: int, ttype: str) -> str:
+    return f"**{utils.title_case_type(ttype)} — Tier {tier}**"
+
+
+def _has_forum_index() -> bool:
+    return config.TANK_INDEX_FORUM_CHANNEL_ID > 0
+
+
+def _has_normal_index() -> bool:
+    return config.TANK_INDEX_NORMAL_CHANNEL_ID > 0
+
+
+def _ensure_index_configured():
+    if _has_forum_index() or _has_normal_index():
+        return
+    raise RuntimeError(
+        "Index channel is not configured. Set TANK_INDEX_NORMAL_CHANNEL_ID or TANK_INDEX_FORUM_CHANNEL_ID."
+    )
+
+
+async def _resolve_forum_channel(bot: discord.Client) -> discord.ForumChannel:
+    forum = bot.get_channel(config.TANK_INDEX_FORUM_CHANNEL_ID)
+    if forum is None:
+        forum = await bot.fetch_channel(config.TANK_INDEX_FORUM_CHANNEL_ID)
+    if not isinstance(forum, discord.ForumChannel):
+        raise TypeError("TANK_INDEX_FORUM_CHANNEL_ID must point to a Forum Channel")
+    return forum
+
+
+async def _resolve_normal_channel(bot: discord.Client) -> discord.TextChannel:
+    channel = bot.get_channel(config.TANK_INDEX_NORMAL_CHANNEL_ID)
+    if channel is None:
+        channel = await bot.fetch_channel(config.TANK_INDEX_NORMAL_CHANNEL_ID)
+    if not isinstance(channel, discord.TextChannel):
+        raise TypeError("TANK_INDEX_NORMAL_CHANNEL_ID must point to a Text Channel")
+    return channel
 
 
 def _safe_text(value: object, *, fallback: str = "—") -> str:
@@ -13,6 +53,12 @@ def _safe_text(value: object, *, fallback: str = "—") -> str:
     if not raw:
         raw = fallback
     return discord.utils.escape_mentions(raw)
+
+
+def _safe_inline_text(value: object, *, fallback: str = "—") -> str:
+    raw = _safe_text(value, fallback=fallback)
+    # Header lines are outside code blocks, so escape markdown control chars.
+    return discord.utils.escape_markdown(raw, as_needed=False)
 
 
 def _fmt_local(iso: str | None) -> str:
@@ -96,13 +142,15 @@ def _split_into_pages(header_lines: list[str], table_lines: list[str], footer_li
     return fixed
 
 async def upsert_bucket_thread(bot: discord.Client, tier: int, ttype: str):
-    forum = bot.get_channel(config.TANK_INDEX_FORUM_CHANNEL_ID)
-    if forum is None:
-        forum = await bot.fetch_channel(config.TANK_INDEX_FORUM_CHANNEL_ID)
+    _ensure_index_configured()
+    if _has_forum_index():
+        await _upsert_bucket_forum_thread(bot, tier, ttype)
+    if _has_normal_index():
+        await upsert_bucket_message(bot, tier, ttype)
 
-    # Optional but recommended: hard fail early if misconfigured
-    if not isinstance(forum, discord.ForumChannel):
-        raise TypeError("TANK_INDEX_FORUM_CHANNEL_ID must point to a Forum Channel")
+
+async def _upsert_bucket_forum_thread(bot: discord.Client, tier: int, ttype: str):
+    forum = await _resolve_forum_channel(bot)
 
     thread_id = await db.get_index_thread_id(tier, ttype)
     rows = await db.get_bucket_snapshot_rows(tier, ttype)
@@ -140,46 +188,54 @@ async def targeted_update(bot: discord.Client, tier: int, ttype: str):
 
 
 async def rebuild_all(bot: discord.Client):
-    forum = bot.get_channel(config.TANK_INDEX_FORUM_CHANNEL_ID) or await bot.fetch_channel(config.TANK_INDEX_FORUM_CHANNEL_ID)
-    if not isinstance(forum, discord.ForumChannel):
-        raise TypeError("TANK_INDEX_FORUM_CHANNEL_ID must point to a Forum Channel")
+    _ensure_index_configured()
 
-    # 1) Delete all existing forum threads/posts (active + archived) in this index forum
-    seen_ids: set[int] = set()
-    for th in list(getattr(forum, "threads", []) or []):
-        try:
-            await th.delete()
-            seen_ids.add(int(th.id))
-        except Exception:
-            pass
-    try:
-        async for th in forum.archived_threads(limit=1000):
-            if int(th.id) in seen_ids:
-                continue
+    if _has_normal_index():
+        channel = await _resolve_normal_channel(bot)
+        if bot.user is not None:
+            async for msg in channel.history(limit=5000):
+                if not msg.author or msg.author.id != bot.user.id:
+                    continue
+                if not _is_index_snapshot_message(msg):
+                    continue
+                try:
+                    await msg.delete()
+                except Exception:
+                    pass
+
+    if _has_forum_index():
+        forum = await _resolve_forum_channel(bot)
+        # 1) Delete all existing forum threads/posts (active + archived) in this index forum
+        seen_ids: set[int] = set()
+        for th in list(getattr(forum, "threads", []) or []):
             try:
                 await th.delete()
                 seen_ids.add(int(th.id))
             except Exception:
                 pass
-    except Exception:
-        pass
+        try:
+            async for th in forum.archived_threads(limit=1000):
+                if int(th.id) in seen_ids:
+                    continue
+                try:
+                    await th.delete()
+                    seen_ids.add(int(th.id))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # DB mappings are forum-thread mappings.
+        await db.clear_index_threads()
 
-    # 2) Clear DB mapping and recreate all buckets from scratch
-    await db.clear_index_threads()
     buckets = await db.list_tier_type_buckets()
     for tier, type_ in buckets:
         await upsert_bucket_thread(bot, int(tier), str(type_))
 
 async def rebuild_missing(bot: discord.Client):
-    # Only ensure mappings exist for current tiers/types. If missing mapping, create.
-    tanks = await db.list_tanks()
-    mappings = await db.list_index_mappings()
-    types = sorted({t[2] for t in tanks})
-    tiers = sorted({int(t[1]) for t in tanks})
-    for ttype in types:
-        for tier in tiers:
-            if (int(tier), str(ttype)) not in mappings:
-                await upsert_bucket_thread(bot, tier, ttype)
+    # Ensure index snapshots exist/are refreshed in every configured destination.
+    buckets = await db.list_tier_type_buckets()
+    for tier, type_ in buckets:
+        await upsert_bucket_thread(bot, int(tier), str(type_))
 
 def _sorted_snapshot_rows(rows: list[dict]) -> list[dict]:
     return sorted(
@@ -188,17 +244,25 @@ def _sorted_snapshot_rows(rows: list[dict]) -> list[dict]:
     )
 
 async def update_bucket_thread_snapshot(bot: discord.Client, forum_channel_id: int, thread_id: int, tier: int, type_: str):
-    forum = bot.get_channel(forum_channel_id)
-    if forum is None:
-        forum = await bot.fetch_channel(forum_channel_id)
-
-    thread = forum.get_thread(thread_id)
-    if thread is None:
-        thread = await bot.fetch_channel(thread_id)
-
+    channel = bot.get_channel(forum_channel_id)
+    if channel is None:
+        channel = await bot.fetch_channel(forum_channel_id)
     rows = await db.get_bucket_snapshot_rows(tier, type_)
     pages = render_bucket_snapshot_pages(tier, type_, rows)
-    await _sync_snapshot_pages(bot, thread, pages, tier, type_)
+    if isinstance(channel, discord.ForumChannel):
+        thread = channel.get_thread(thread_id)
+        if thread is None:
+            thread = await bot.fetch_channel(thread_id)
+        await _sync_snapshot_pages(bot, thread, pages, tier, type_)
+        return
+    if isinstance(channel, discord.TextChannel):
+        try:
+            starter = await channel.fetch_message(thread_id)
+        except Exception:
+            starter = None
+        await _sync_snapshot_pages_in_channel(bot, channel, starter, pages, tier, type_)
+        return
+    raise TypeError("Index channel mapping points to unsupported channel type")
 
 async def _resolve_starter_message(thread: discord.Thread) -> discord.Message | None:
     starter_id = getattr(thread, "starter_message_id", None)
@@ -217,6 +281,23 @@ def _is_snapshot_page_message(msg: discord.Message) -> bool:
         return True
     # Snapshot marker is embedded as a standalone line after the header.
     return bool(_SNAPSHOT_MARKER_RE.search(content))
+
+
+def _is_bucket_snapshot_message(msg: discord.Message, tier: int, ttype: str) -> bool:
+    content = msg.content or ""
+    return _bucket_title(tier, ttype) in content and _is_snapshot_page_message(msg)
+
+
+def _is_bucket_starter_message(msg: discord.Message, tier: int, ttype: str) -> bool:
+    content = msg.content or ""
+    if _bucket_title(tier, ttype) not in content:
+        return False
+    return bool(_SNAPSHOT_PAGE_1_RE.search(content))
+
+
+def _is_index_snapshot_message(msg: discord.Message) -> bool:
+    content = msg.content or ""
+    return _is_snapshot_page_message(msg) and bool(_INDEX_TITLE_RE.search(content))
 
 async def _recent_snapshot_page_messages(
     thread: discord.Thread,
@@ -285,8 +366,113 @@ async def _sync_snapshot_pages(
     for content in desired_extra[keep_n:]:
         await thread.send(content, allowed_mentions=discord.AllowedMentions.none())
 
+
+async def _recent_snapshot_page_messages_in_channel(
+    channel: discord.TextChannel,
+    *,
+    bot_user_id: int,
+    starter_id: int,
+    tier: int,
+    ttype: str,
+    desired_extra_pages: int,
+) -> list[discord.Message]:
+    history_limit = max(100, min(1000, desired_extra_pages * 20 + 300))
+    found: list[discord.Message] = []
+    async for msg in channel.history(limit=history_limit):
+        if msg.id == starter_id:
+            continue
+        if not msg.author or msg.author.id != bot_user_id:
+            continue
+        if not _is_bucket_snapshot_message(msg, tier, ttype):
+            continue
+        found.append(msg)
+    found.reverse()
+    return found
+
+
+async def _find_bucket_starter_message_in_channel(
+    channel: discord.TextChannel,
+    *,
+    bot_user_id: int,
+    tier: int,
+    ttype: str,
+) -> discord.Message | None:
+    async for msg in channel.history(limit=5000):
+        if not msg.author or msg.author.id != bot_user_id:
+            continue
+        if _is_bucket_starter_message(msg, tier, ttype):
+            return msg
+    return None
+
+
+async def _sync_snapshot_pages_in_channel(
+    bot: discord.Client,
+    channel: discord.TextChannel,
+    starter: discord.Message | None,
+    pages: list[str],
+    tier: int,
+    ttype: str,
+):
+    if not pages:
+        pages = [f"Leaderboard - Tier {tier} / {utils.title_case_type(ttype)}"]
+
+    if starter is None:
+        starter = await channel.send(pages[0], allowed_mentions=discord.AllowedMentions.none())
+    elif starter.content != pages[0]:
+        await starter.edit(content=pages[0], allowed_mentions=discord.AllowedMentions.none())
+
+    if bot.user is None:
+        return
+
+    desired_extra = pages[1:]
+    existing_extra = await _recent_snapshot_page_messages_in_channel(
+        channel,
+        bot_user_id=bot.user.id,
+        starter_id=starter.id,
+        tier=tier,
+        ttype=ttype,
+        desired_extra_pages=len(desired_extra),
+    )
+
+    keep_n = min(len(existing_extra), len(desired_extra))
+    for idx in range(keep_n):
+        msg = existing_extra[idx]
+        new_content = desired_extra[idx]
+        if msg.content != new_content:
+            try:
+                await msg.edit(content=new_content, allowed_mentions=discord.AllowedMentions.none())
+            except Exception:
+                pass
+
+    for msg in existing_extra[keep_n:]:
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+
+    for content in desired_extra[keep_n:]:
+        await channel.send(content, allowed_mentions=discord.AllowedMentions.none())
+
+
+async def upsert_bucket_message(bot: discord.Client, tier: int, ttype: str):
+    channel = await _resolve_normal_channel(bot)
+    rows = await db.get_bucket_snapshot_rows(tier, ttype)
+    pages = render_bucket_snapshot_pages(tier, ttype, rows)
+    if not pages:
+        pages = [f"Leaderboard — Tier {tier} / {utils.title_case_type(ttype)}"]
+
+    starter: discord.Message | None = None
+    if bot.user is not None:
+        starter = await _find_bucket_starter_message_in_channel(
+            channel,
+            bot_user_id=bot.user.id,
+            tier=tier,
+            ttype=ttype,
+        )
+    await _sync_snapshot_pages_in_channel(bot, channel, starter, pages, tier, ttype)
+
 def render_bucket_snapshot_pages(tier: int, type_: str, rows: list[dict]) -> list[str]:
-    title = f"**{utils.title_case_type(type_)} — Tier {tier}**"
+    title = _bucket_title(tier, type_)
     rows = _sorted_snapshot_rows(rows)
 
     # Build "best per tank" list from rows
@@ -297,13 +483,16 @@ def render_bucket_snapshot_pages(tier: int, type_: str, rows: list[dict]) -> lis
     latest_line = "Latest: —"
     if latest:
         latest_line = (
-            f"Latest: {_safe_text(latest.get('tank_name'))}  {latest['score']}  "
-            f"{_safe_text(latest.get('player_name'))}  {_safe_text(_fmt_local(latest.get('created_at')))}"
+            f"Latest: {_safe_inline_text(latest.get('tank_name'))}  {latest['score']}  "
+            f"{_safe_inline_text(latest.get('player_name'))}  {_safe_inline_text(_fmt_local(latest.get('created_at')))}"
         )
 
     top_line = "Top:    —"
     if top:
-        top_line = f"Top:    {_safe_text(top.get('tank_name'))}  {top['score']}  {_safe_text(top.get('player_name'))}"
+        top_line = (
+            f"Top:    {_safe_inline_text(top.get('tank_name'))}  "
+            f"{top['score']}  {_safe_inline_text(top.get('player_name'))}"
+        )
 
     header_lines = [
         title,
@@ -349,11 +538,12 @@ def render_bucket_snapshot(tier: int, type_: str, rows: list[dict]) -> str:
 
         latest_when = _fmt_local(latest.get("created_at"))
         header_lines.append(
-            f"Latest: {_safe_text(latest.get('tank_name'))}  {latest['score']}  "
-            f"{_safe_text(utils.clip(latest.get('player_name') or '—', 16))}  {_safe_text(latest_when)}"
+            f"Latest: {_safe_inline_text(latest.get('tank_name'))}  {latest['score']}  "
+            f"{_safe_inline_text(utils.clip(latest.get('player_name') or '—', 16))}  {_safe_inline_text(latest_when)}"
         )
         header_lines.append(
-            f"Top:    {_safe_text(top.get('tank_name'))}  {top['score']}  {_safe_text(utils.clip(top.get('player_name') or '—', 16))}"
+            f"Top:    {_safe_inline_text(top.get('tank_name'))}  {top['score']}  "
+            f"{_safe_inline_text(utils.clip(top.get('player_name') or '—', 16))}"
         )
 
     # Build table rows (strings)

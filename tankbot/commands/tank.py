@@ -567,7 +567,7 @@ def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord
 
         await interaction.followup.send("\n".join(msg), ephemeral=True)
 
-    @grp.command(name="rebuild_index", description="Delete and fully recreate the forum index (admins only)")
+    @grp.command(name="rebuild_index", description="Delete and fully recreate index snapshots (admins only)")
     async def rebuild_index(interaction: discord.Interaction):
         if not _require_admin(interaction):
             await interaction.response.send_message("Nope. You need **Manage Server**.", ephemeral=True)
@@ -576,7 +576,7 @@ def register(tree: app_commands.CommandTree, bot: discord.Client, guild: discord
         await forum_index.rebuild_all(interaction.client)
         await interaction.followup.send("✅ Index rebuilt from scratch (all previous index posts removed and recreated).", ephemeral=True)
 
-    @grp.command(name="rebuild_index_missing", description="Create/repair missing forum index threads")
+    @grp.command(name="rebuild_index_missing", description="Create/repair missing index snapshots")
     async def rebuild_index_missing(interaction: discord.Interaction):
         if not _require_admin(interaction):
             await interaction.response.send_message("Nope. You need **Manage Server**.", ephemeral=True)

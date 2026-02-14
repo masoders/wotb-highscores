@@ -15,7 +15,6 @@ def setup(tree: app_commands.CommandTree, *, guild: discord.abc.Snowflake | None
             "**Public commands:**",
             "- `/help` — show this help message",
             "- `/highscore show` — show champion (global or filtered)",
-            "- `/highscore history` — recent submissions + stats",
             "- `/highscore qualify` — check if damage would qualify (no submit)",
             "",
         ]
@@ -24,6 +23,7 @@ def setup(tree: app_commands.CommandTree, *, guild: discord.abc.Snowflake | None
             lines.extend([
                 "**Commander commands:**",
                 "- `/highscore submit` — submit a new highscore",
+                "- `/highscore history` — recent submissions + stats",
                 "- `/highscore edit` — edit submission by id (score/player)",
                 "- `/highscore delete` — revert or hard-delete submission by id",
                 "- `/highscore refresh_web` — regenerate static leaderboard webpage",
@@ -42,7 +42,7 @@ def setup(tree: app_commands.CommandTree, *, guild: discord.abc.Snowflake | None
                 "- `/tank alias_add|alias_list|alias_seed_common` — alias management",
                 "- `/tank merge` — merge duplicate tank into canonical tank",
                 "- `/tank changes|preview_import|import_csv` — tank audit/import",
-                "- `/tank rebuild_index|rebuild_index_missing` — forum index rebuild/repair",
+                "- `/tank rebuild_index|rebuild_index_missing` — index snapshot rebuild/repair",
                 "- `/system health|reload` — runtime health + command reload",
                 "",
             ])

@@ -1145,16 +1145,29 @@ async def get_champion():
         """)
         return await cur.fetchone()
 
-async def get_recent(limit: int):
+async def get_recent(limit: int, tier: int | None = None, ttype: str | None = None):
+    where: list[str] = []
+    params: list[object] = []
+    if tier is not None:
+        where.append("t.tier = ?")
+        params.append(int(tier))
+    if ttype is not None:
+        where.append("t.type = ?")
+        params.append(str(ttype))
+
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    params.append(int(limit))
+
     async with _connect_db() as db:
-        cur = await db.execute("""
+        cur = await db.execute(f"""
         SELECT s.id, s.player_name_raw, s.tank_name, s.score,
                s.submitted_by, s.created_at, t.tier, t.type
         FROM submissions s
         JOIN tanks t ON t.name = s.tank_name
+        {where_sql}
         ORDER BY s.id DESC
         LIMIT ?;
-        """, (limit,))
+        """, tuple(params))
         return await cur.fetchall()
 
 async def top_holders_by_tank(limit: int = 10):
@@ -1795,7 +1808,7 @@ async def get_submission_by_id(submission_id: int):
 
 async def edit_submission_score(
     submission_id: int,
-    new_score: int,
+    new_score: int | None,
     actor: str,
     created_at: str,
     new_player_raw: str | None = None,
@@ -1823,6 +1836,22 @@ async def edit_submission_score(
         old_score = int(row[4])
         player_raw = str(new_player_raw) if new_player_raw is not None else old_player_raw
         player_norm = str(new_player_norm) if new_player_norm is not None else old_player_norm
+        score_to_set = int(new_score) if new_score is not None else old_score
+
+        player_changed = player_raw != old_player_raw
+        score_changed = score_to_set != old_score
+        if not player_changed and not score_changed:
+            return {
+                "id": sid,
+                "tank_name": tank_name,
+                "old_player_raw": old_player_raw,
+                "new_player_raw": player_raw,
+                "old_score": old_score,
+                "new_score": score_to_set,
+                "score_changed": False,
+                "player_changed": False,
+                "unchanged": True,
+            }
 
         try:
             await conn.execute(
@@ -1831,13 +1860,15 @@ async def edit_submission_score(
                 SET player_name_raw = ?, player_name_norm = ?, score = ?, submitted_by = ?, created_at = ?
                 WHERE id = ?
                 """,
-                (player_raw, player_norm, int(new_score), actor, created_at, sid),
+                (player_raw, player_norm, score_to_set, actor, created_at, sid),
             )
         except aiosqlite.IntegrityError:
             return {"error": "duplicate_player_for_tank", "tank_name": tank_name}
 
         details = "manual-edit"
-        if player_raw != old_player_raw:
+        if score_changed:
+            details += f"|score:{old_score}->{score_to_set}"
+        if player_changed:
             details += f"|player:{old_player_raw}->{player_raw}"
         await _log_score_change_conn(
             conn,
@@ -1847,7 +1878,7 @@ async def edit_submission_score(
             player_name_raw=player_raw,
             player_name_norm=player_norm,
             old_score=old_score,
-            new_score=int(new_score),
+            new_score=score_to_set,
             actor=actor,
             created_at=created_at,
             details=details,
@@ -1859,7 +1890,10 @@ async def edit_submission_score(
         "old_player_raw": old_player_raw,
         "new_player_raw": player_raw,
         "old_score": old_score,
-        "new_score": int(new_score),
+        "new_score": score_to_set,
+        "score_changed": score_changed,
+        "player_changed": player_changed,
+        "unchanged": False,
     }
 
 async def delete_submission(submission_id: int, actor: str, created_at: str, hard_delete: bool = False):
