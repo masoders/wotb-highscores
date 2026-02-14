@@ -27,9 +27,29 @@ def _safe_web_multiline(value: object, *, fallback: str = "—") -> str:
     if not raw:
         raw = fallback
     # Allow escaped newlines from .env values (e.g. "\\n") and real newlines.
-    text = raw.replace("\\n", "\n")
+    text = raw.replace("\\n", "\n").strip()
     parts = text.split("\n")
     return "<br>".join(_safe_web_text(part, fallback="", quote=False) for part in parts)
+
+
+def _fmt_local(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    s = str(iso).strip()
+    while s.endswith("ZZ"):
+        s = s[:-1]
+    try:
+        ts = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        local_tz = datetime.now().astimezone().tzinfo
+        if local_tz is not None:
+            ts = ts.astimezone(local_tz)
+        return ts.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        raw = str(iso).strip().replace("T", " ")
+        raw = raw.replace("+00:00", "").replace("Z", "")
+        return raw.strip() or "—"
 
 
 def _json_for_html(obj: object) -> str:
@@ -724,6 +744,7 @@ def _build_script() -> str:
   const playerList = document.querySelector("[data-player-list]");
   const filterTier = document.querySelector("[data-filter-tier]");
   const filterType = document.querySelector("[data-filter-type]");
+  const filterTankSearch = document.querySelector("[data-filter-tank-search]");
   const filterReset = document.querySelector("[data-filter-reset]");
   const changesTarget = document.querySelector("[data-recent-changes]");
   let current = "stats";
@@ -731,6 +752,7 @@ def _build_script() -> str:
   let playerQuery = "";
   let tierFilter = "";
   let typeFilter = "";
+  let tankQuery = "";
 
   const normalize = (v) => (v || "").toLocaleLowerCase().trim();
   const escapeHtml = (v) => String(v ?? "")
@@ -749,6 +771,7 @@ def _build_script() -> str:
     setParam("view", current);
     setParam("tier", tierFilter);
     setParam("type", typeFilter);
+    setParam("tank", tankQuery);
     history.replaceState({}, "", url.toString());
   };
 
@@ -758,6 +781,7 @@ def _build_script() -> str:
     current = view === "tank" || view === "player" || view === "stats" ? view : "stats";
     tierFilter = (p.get("tier") || "").trim();
     typeFilter = normalize(p.get("type"));
+    tankQuery = p.get("tank") || "";
   };
 
   const populateFilters = () => {
@@ -778,6 +802,9 @@ def _build_script() -> str:
         `<option value="${escapeHtml(t)}">${escapeHtml(typeLabel(t))}</option>`
       )).join("");
       filterType.value = typeFilter;
+    }
+    if (filterTankSearch) {
+      filterTankSearch.value = tankQuery;
     }
   };
 
@@ -823,6 +850,7 @@ def _build_script() -> str:
   };
 
   const filterTankBlocks = () => {
+    const tankNeedle = normalize(tankQuery);
     const tierCards = Array.from(document.querySelectorAll('[data-main-view="tank"] .tier-card'));
     tierCards.forEach((tierCard) => {
       const tierVal = tierCard.getAttribute("data-tier") || "";
@@ -836,10 +864,13 @@ def _build_script() -> str:
         let visibleRows = 0;
         rowPairs.forEach((row) => {
           const detail = row.nextElementSibling;
-          row.style.display = "";
+          const tankCell = row.querySelector("td.tank-name");
+          const tankText = normalize(tankCell ? tankCell.textContent : "");
+          const tankMatches = !tankNeedle || tankText.includes(tankNeedle);
+          row.style.display = tankMatches ? "" : "none";
           if (detail && detail.classList.contains("row-detail")) detail.style.display = "none";
           row.classList.remove("expanded");
-          visibleRows += 1;
+          if (tankMatches) visibleRows += 1;
         });
         const visible = tierMatches && typeMatches && visibleRows > 0;
         typeBlock.style.display = visible ? "" : "none";
@@ -910,12 +941,21 @@ def _build_script() -> str:
       setUrlState();
     });
   }
+  if (filterTankSearch) {
+    filterTankSearch.addEventListener("input", () => {
+      tankQuery = filterTankSearch.value || "";
+      filterTankBlocks();
+      setUrlState();
+    });
+  }
   if (filterReset) {
     filterReset.addEventListener("click", () => {
       tierFilter = "";
       typeFilter = "";
+      tankQuery = "";
       if (filterTier) filterTier.value = "";
       if (filterType) filterType.value = "";
+      if (filterTankSearch) filterTankSearch.value = "";
       filterTankBlocks();
       setUrlState();
     });
@@ -1037,6 +1077,8 @@ def _render_html(
         "<select id=\"filter-tier\" data-filter-tier><option value=\"\">All tiers</option></select>",
         "<label for=\"filter-type\">Type</label>",
         "<select id=\"filter-type\" data-filter-type><option value=\"\">All types</option></select>",
+        "<label for=\"filter-tank-search\">Tank</label>",
+        "<input id=\"filter-tank-search\" data-filter-tank-search type=\"search\" placeholder=\"Search tank\" autocomplete=\"off\" />",
         "<button type=\"button\" data-filter-reset>Reset Filters</button>",
         "</div>",
         "<div class=\"player-tools\" data-player-tools-wrap>",
@@ -1147,7 +1189,7 @@ def _render_html(
     content.extend(
         [
             "<p class=\"footer\">",
-            f"Generated at {_safe_web_text(utils.fmt_utc(now))} • Tanks listed: {tank_total}",
+            f"Generated at {_safe_web_text(_fmt_local(now))} • Tanks listed: {tank_total}",
             "</p>",
             "</main>",
             f"<script id=\"tb-data\" type=\"application/json\">{data_blob}</script>",
@@ -1201,7 +1243,7 @@ async def generate_leaderboard_page() -> str | None:
                 "tank_name": str(tank_name),
                 "player_name": str(player_name),
                 "score_change": f"{old_text} -> {new_text}",
-                "when": utils.fmt_utc(str(created_at)),
+                "when": _fmt_local(str(created_at)),
             }
         )
 

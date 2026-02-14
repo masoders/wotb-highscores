@@ -9,7 +9,9 @@ LOG_FILE="tankbot.log"
 BOOT_LOG_FILE="startup.out"
 
 echo "=== ${PROJECT_NAME} startup ==="
-cd "$(dirname "$0")"
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$PROJECT_DIR"
+BOT_ENTRY="$PROJECT_DIR/bot.py"
 
 is_pid_running() {
     local pid="$1"
@@ -32,6 +34,49 @@ is_expected_process() {
     fi
     [[ "$cmd" == *"python"* ]] && [[ "$cmd" == *"bot.py"* ]]
 }
+
+find_running_bot_pids() {
+    local pids=""
+    local pid=""
+    local cmd=""
+    # Preferred path: pgrep exact entry match.
+    pids="$(pgrep -f "$BOT_ENTRY" 2>/dev/null || true)"
+    if [[ -z "${pids//[[:space:]]/}" ]]; then
+        # Fallback for environments where pgrep cannot enumerate processes.
+        pids="$(
+            ps ax -o pid= -o command= 2>/dev/null \
+            | awk -v entry="$BOT_ENTRY" -v proj="$PROJECT_DIR" '
+                index($0, entry) > 0 { print $1; next }
+                /python/ && /bot\.py/ && index($0, proj) > 0 { print $1 }
+            ' || true
+        )"
+    fi
+    while IFS= read -r pid; do
+        [[ -z "${pid:-}" ]] && continue
+        pid="$(awk '{print $1}' <<<"$pid")"
+        [[ -z "${pid:-}" ]] && continue
+        is_pid_running "$pid" || continue
+        cmd="$(process_cmdline "$pid")"
+        [[ -z "${cmd:-}" ]] && continue
+        if [[ "$cmd" == *"$BOT_ENTRY"* ]] || { [[ "$cmd" == *"python"* ]] && [[ "$cmd" == *"bot.py"* ]] && [[ "$cmd" == *"$PROJECT_DIR"* ]]; }; then
+            echo "$pid"
+        fi
+    done < <(printf "%s\n" "$pids" | awk 'NF {print $1}' | sort -u)
+}
+
+running_pids="$(find_running_bot_pids | tr '\n' ' ' | xargs || true)"
+if [[ -n "${running_pids:-}" ]]; then
+    count="$(wc -w <<<"$running_pids" | tr -d '[:space:]')"
+    if [[ "$count" -gt 1 ]]; then
+        echo "❌ Multiple bot processes are already running: $running_pids"
+        echo "Run ./stop.sh first to clean old processes, then start again."
+        exit 1
+    fi
+    only_pid="$(awk '{print $1}' <<<"$running_pids")"
+    echo "ℹ️  Bot already running (PID $only_pid)."
+    echo "$only_pid" > "$PID_FILE"
+    exit 0
+fi
 
 if [[ -f "$PID_FILE" ]]; then
     existing_pid="$(tr -d '[:space:]' < "$PID_FILE" || true)"
@@ -106,7 +151,7 @@ echo "Using Python rotating logs via LOG_PATH/LOG_MAX_BYTES/LOG_BACKUP_COUNT."
 echo "Startup capture log: $BOOT_LOG_FILE"
 
 : > "$BOOT_LOG_FILE"
-nohup python bot.py >> "$BOOT_LOG_FILE" 2>&1 &
+nohup python "$BOT_ENTRY" >> "$BOOT_LOG_FILE" 2>&1 &
 BOT_PID=$!
 echo "$BOT_PID" > "$PID_FILE"
 
