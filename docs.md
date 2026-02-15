@@ -46,6 +46,9 @@ Legend:
 - `/tank list [tier] [type]`
   - Description: List tanks with optional filters.
   - Example: `/tank list tier:8 type:heavy`
+- `/tank rename <current_name> <new_name>`
+  - Description: Rename a tank to a corrected/canonical name.
+  - Example: `/tank rename current_name:"T-34 85" new_name:"T-34-85"`
 - `/tank export_csv`
   - Description: Export tank roster as CSV.
   - Example: `/tank export_csv`
@@ -73,6 +76,18 @@ Legend:
 - `/tank changes [limit]`
   - Description: Show tank change log.
   - Example: `/tank changes limit:20`
+- `/tank alias_add <alias> <tank>`
+  - Description: Map an alternate tank name to a canonical tank.
+  - Example: `/tank alias_add alias:"Ru 251" tank:"Spähpanzer Ru 251"`
+- `/tank alias_list [limit]`
+  - Description: List configured tank aliases.
+  - Example: `/tank alias_list limit:50`
+- `/tank alias_seed_common`
+  - Description: Seed common import aliases for known tank-name variants.
+  - Example: `/tank alias_seed_common`
+- `/tank merge <source> <target> [remove_source]`
+  - Description: Merge duplicate tank variant into canonical tank and reconcile submissions.
+  - Example: `/tank merge source:"Ru 251" target:"Spähpanzer Ru 251" remove_source:true`
 - `/tank preview_import <csv_file> [delete_missing]`
   - Description: Preview roster CSV changes without applying.
   - Example: `/tank preview_import csv_file:tanks.csv delete_missing:false`
@@ -159,8 +174,7 @@ DASHBOARD_BIND=127.0.0.1
 DASHBOARD_PORT=8080
 DASHBOARD_TOKEN=   # optional
 ```
-Endpoints: `/` overview, `/tanks`, `/recent`.
-If DASHBOARD_TOKEN is set, use `Authorization: Bearer <token>` or `?token=`.
+If `DASHBOARD_TOKEN` is set, use `Authorization: Bearer <token>` or `?token=`.
 
 ## Static Leaderboard Webpage
 The bot can generate a modern static webpage grouped as:
@@ -195,10 +209,9 @@ Use `Caddyfile.dashboard.example` as a starting point. Keep the dashboard bound 
 
 
 ## Dashboard Security
-- **Strict mode:** dashboard refuses to start unless `DASHBOARD_TOKEN` is set.
-- **Auth:** `Authorization: Bearer <token>` or `?token=`.
-- **Rate limiting:** 60 requests / 60 seconds per IP (in-memory).
-- **Health endpoint:** `/healthz` (still requires token in strict mode).
+- Set `DASHBOARD_TOKEN` to require bearer-token access.
+- Keep `DASHBOARD_BIND` on loopback (`127.0.0.1`/`::1`) and expose via HTTPS reverse proxy only.
+- System health probes dashboard `/healthz` when dashboard checks are enabled.
 
 
 ## Self-contained encrypted backups
@@ -226,6 +239,6 @@ LOG_PATH=tankbot.log
 
 
 ## Backup verification
-Admin command:
+Commander command:
 - `/backup verify_latest` — downloads the newest backup attachment in the backup channel and runs `PRAGMA integrity_check`.
 Encrypted backups require `BACKUP_ENCRYPTION_PASSPHRASE` to be set.

@@ -18,8 +18,8 @@ Create:
 
 ## 2. Install (3 minutes)
 ```bash
-unzip tank_highscore_bot_release_v13.zip
-cd tank_highscore_bot
+git clone <your-repo-url> tankbot-test
+cd tankbot-test
 python3.11 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -48,7 +48,7 @@ python bot.py
 
 ## 5. Load tanks + build index
 ```text
-/tank import_csv
+/tank import_csv file:tanks.csv
 /tank rebuild_index
 ```
 

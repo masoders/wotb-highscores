@@ -739,6 +739,7 @@ def _build_script() -> str:
   const actionButtons = Array.from(document.querySelectorAll("[data-bulk-action]"));
   const panels = Array.from(document.querySelectorAll("[data-main-view]"));
   const playerToolsWrap = document.querySelector("[data-player-tools-wrap]");
+  const tankToolsWrap = document.querySelector("[data-tank-tools-wrap]");
   const playerSortButtons = Array.from(document.querySelectorAll("[data-player-sort-btn]"));
   const playerSearch = document.querySelector("[data-player-search]");
   const playerList = document.querySelector("[data-player-list]");
@@ -904,6 +905,9 @@ def _build_script() -> str:
     });
     if (playerToolsWrap) {
       playerToolsWrap.style.display = view === "player" ? "flex" : "none";
+    }
+    if (tankToolsWrap) {
+      tankToolsWrap.style.display = view === "tank" ? "inline-flex" : "none";
     }
     setUrlState();
   };
@@ -1072,7 +1076,7 @@ def _render_html(
         "<button type=\"button\" data-bulk-action=\"collapse\">Collapse All</button>",
         "<button type=\"button\" data-bulk-action=\"expand\">Expand All</button>",
         "</div>",
-        "<div class=\"filter-tools\" role=\"group\" aria-label=\"Leaderboard filters\">",
+        "<div class=\"filter-tools\" data-tank-tools-wrap role=\"group\" aria-label=\"Leaderboard filters\" style=\"display:none;\">",
         "<label for=\"filter-tier\">Tier</label>",
         "<select id=\"filter-tier\" data-filter-tier><option value=\"\">All tiers</option></select>",
         "<label for=\"filter-type\">Type</label>",

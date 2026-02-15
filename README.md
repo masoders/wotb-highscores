@@ -148,10 +148,9 @@ Use `Caddyfile.dashboard.example` as a starting point. Keep the dashboard bound 
 
 
 ## Dashboard Security
-- **Strict mode:** dashboard refuses to start unless `DASHBOARD_TOKEN` is set.
-- **Auth:** `Authorization: Bearer <token>` or `?token=`.
-- **Rate limiting:** 60 requests / 60 seconds per IP (in-memory).
-- **Health endpoint:** `/healthz` (still requires token in strict mode).
+- Set `DASHBOARD_TOKEN` to require bearer-token access for dashboard endpoints.
+- Use `Authorization: Bearer <token>` or `?token=` when a token is configured.
+- Keep `DASHBOARD_BIND` on loopback (`127.0.0.1`/`::1`) and expose via HTTPS reverse proxy only.
 
 
 ## Self-contained encrypted backups
@@ -179,6 +178,6 @@ LOG_PATH=tankbot.log
 
 
 ## Backup verification
-Admin command:
+Commander command:
 - `/backup verify_latest` — downloads the newest backup attachment in the backup channel and runs `PRAGMA integrity_check`.
 Encrypted backups require `BACKUP_ENCRYPTION_PASSPHRASE` to be set.

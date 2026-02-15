@@ -1,6 +1,6 @@
 # Tank Highscore Bot — Complete Setup Guide
 
-**Version:** v11  
+**Version:** repository build  
 **Audience:** Discord server admins  
 **Python:** 3.11+
 
@@ -97,10 +97,9 @@ Save the **Forum Channel ID**.
 ## 5. Installation
 
 ```bash
-unzip tank_highscore_bot_release_v15.zip
-cd tank_highscore_bot
+git clone <your-repo-url> tankbot-test
+cd tankbot-test
 python3.11 -m venv venv
-./start.sh
 source venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -176,7 +175,7 @@ T-34,5,medium
 Discord:
 ```
 /tank preview_import csv_file:tanks.csv
-/tank import_csv csv_file:tanks.csv
+/tank import_csv file:tanks.csv
 ```
 
 ---
@@ -196,22 +195,40 @@ Creates locked, pinned, tagged threads per Tier × Type.
 ### Users
 - /help
 - /highscore show
-- /highscore history
 - /highscore qualify
 
 ### Clan Commanders
 - /highscore submit
+- /highscore history
 - /highscore edit
 - /highscore delete
 - /highscore refresh_web
 - /highscore refresh_players
+- /tank add
+- /tank edit
+- /tank remove
+- /tank rename
+- /tank list
+- /tank export_csv
+- /tank export_scores_csv
 - /backup run_now
 - /backup status
 - /backup verify_latest
 
 ### Admins
-- /tank …
+- /highscore import_scores
+- /highscore changes
+- /tank alias_add
+- /tank alias_list
+- /tank alias_seed_common
+- /tank merge
+- /tank changes
+- /tank preview_import
+- /tank import_csv
+- /tank rebuild_index
+- /tank rebuild_index_missing
 - /system health
+- /system audit_access
 - /system reload
 
 ---
