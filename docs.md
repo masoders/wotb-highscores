@@ -88,6 +88,9 @@ Legend:
 - `/system health`
   - Description: Show runtime, DB, backup, WG refresh, and dashboard health.
   - Example: `/system health`
+- `/system audit_access`
+  - Description: Audit managed channels for bot-required perms, broad access risks, and setup drift.
+  - Example: `/system audit_access`
 - `/system reload`
   - Description: Reload command modules and sync slash commands.
   - Example: `/system reload`

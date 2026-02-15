@@ -1324,6 +1324,61 @@ async def migration_version() -> int:
         await cur.close()
         return int(row[0] if row and row[0] is not None else 0)
 
+async def health_diagnostics() -> dict[str, object]:
+    out: dict[str, object] = {
+        "journal_mode": "n/a",
+        "synchronous": "n/a",
+        "integrity": "n/a",
+        "orphan_submissions": -1,
+        "duplicate_index_mappings": -1,
+    }
+    async with _connect_db() as conn:
+        cur = await conn.execute("PRAGMA journal_mode;")
+        row = await cur.fetchone()
+        await cur.close()
+        if row and row[0] is not None:
+            out["journal_mode"] = str(row[0])
+
+        cur = await conn.execute("PRAGMA synchronous;")
+        row = await cur.fetchone()
+        await cur.close()
+        if row and row[0] is not None:
+            out["synchronous"] = str(row[0])
+
+        cur = await conn.execute("PRAGMA quick_check(1);")
+        row = await cur.fetchone()
+        await cur.close()
+        if row and row[0] is not None:
+            out["integrity"] = str(row[0])
+
+        cur = await conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM submissions s
+            LEFT JOIN tanks t ON t.name = s.tank_name
+            WHERE t.name IS NULL
+            """
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        out["orphan_submissions"] = int(row[0] if row and row[0] is not None else 0)
+
+        cur = await conn.execute(
+            """
+            SELECT COUNT(*) FROM (
+                SELECT tier, type, COUNT(*) AS c
+                FROM tank_index_posts
+                GROUP BY tier, type
+                HAVING c > 1
+            ) dup
+            """
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        out["duplicate_index_mappings"] = int(row[0] if row and row[0] is not None else 0)
+
+    return out
+
 async def log_tank_change(action: str, details: str, actor: str, created_at: str):
     async with _connect_db() as db:
         await db.execute(
