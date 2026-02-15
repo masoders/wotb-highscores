@@ -7,7 +7,7 @@ import aiohttp
 import discord
 from discord.ext import tasks
 
-from . import config, db, utils
+from . import config, db, utils, audit_channel
 
 log = logging.getLogger(__name__)
 _last_wg_sync_utc: str | None = None
@@ -274,7 +274,6 @@ async def bootstrap_if_needed() -> None:
 async def daily_clan_sync_loop(bot: discord.Client):
     global _last_scheduled_wg_sync_utc
 
-    del bot  # currently unused
     if not config.WG_SYNC_ENABLED:
         return
 
@@ -310,5 +309,22 @@ async def daily_clan_sync_loop(bot: discord.Client):
             result.get("added_count"),
             result.get("removed_count"),
         )
+        try:
+            await audit_channel.send(
+                bot,
+                "system|scheduled_wg_refresh|status=ok|"
+                f"region={result.get('region')}|total={result.get('total')}|"
+                f"added={result.get('added_count')}|removed={result.get('removed_count')}",
+            )
+        except Exception:
+            pass
     except Exception:
         log.exception("WG daily sync failed")
+        try:
+            await audit_channel.send(
+                bot,
+                "system|scheduled_wg_refresh|status=fail|"
+                f"region={config.WG_API_REGION}|error={_last_wg_sync_msg or 'unknown'}",
+            )
+        except Exception:
+            pass

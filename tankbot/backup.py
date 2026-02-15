@@ -14,7 +14,7 @@ from cryptography.fernet import Fernet
 import discord
 from discord.ext import tasks
 
-from . import config, db
+from . import config, db, audit_channel
 
 log = logging.getLogger(__name__)
 from .utils import fmt_utc, utc_now_z
@@ -154,6 +154,13 @@ async def weekly_backup_loop(bot: discord.Client):
 
     guild = get_backup_guild(bot, None)
     if guild is None:
+        try:
+            await audit_channel.send(
+                bot,
+                "system|scheduled_backup|status=fail|reason=backup_guild_not_found",
+            )
+        except Exception:
+            pass
         return
 
     channel = guild.get_channel(config.BACKUP_CHANNEL_ID)
@@ -161,6 +168,13 @@ async def weekly_backup_loop(bot: discord.Client):
         try:
             channel = await guild.fetch_channel(config.BACKUP_CHANNEL_ID)
         except Exception:
+            try:
+                await audit_channel.send(
+                    bot,
+                    f"system|scheduled_backup|status=fail|reason=backup_channel_not_found|channel_id={config.BACKUP_CHANNEL_ID}",
+                )
+            except Exception:
+                pass
             return
 
     path = None
@@ -178,6 +192,13 @@ async def weekly_backup_loop(bot: discord.Client):
         await channel.send(content=msg, file=discord.File(path, filename=fname))
         _last_backup_utc, _last_backup_ok, _last_backup_msg = utc_now_z(), True, fname
         try:
+            await audit_channel.send(
+                bot,
+                f"system|scheduled_backup|status=ok|file={fname}|sha256={sha_hex}",
+            )
+        except Exception:
+            pass
+        try:
             await db.set_sync_state("backup:last", _last_backup_utc, _last_backup_utc)
             await db.set_sync_state("backup:last_ok", "1", _last_backup_utc)
             await db.set_sync_state("backup:last_msg", _last_backup_msg, _last_backup_utc)
@@ -192,6 +213,13 @@ async def weekly_backup_loop(bot: discord.Client):
         except Exception:
             log.exception("Failed to persist backup:last failure status")
         log.error(f"Backup failed: {type(e).__name__}: {e}")
+        try:
+            await audit_channel.send(
+                bot,
+                f"system|scheduled_backup|status=fail|error={type(e).__name__}:{e}",
+            )
+        except Exception:
+            pass
         try:
             await channel.send(f"❌ Backup failed: `{type(e).__name__}: {e}`")
         except Exception:

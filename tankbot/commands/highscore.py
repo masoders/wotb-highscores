@@ -412,19 +412,30 @@ async def submit_tank_autocomplete(_interaction: discord.Interaction, current: s
     names = await db.list_tank_names(query=current, limit=25)
     return [app_commands.Choice(name=n, value=n) for n in names[:25]]
 
-@grp.command(name="edit", description="Edit an existing submission by id (damage and optional player)")
+@grp.command(name="edit", description="Edit an existing submission by id (score and/or player)")
 @app_commands.describe(
     submission_id="Submission id from history",
-    score="New damage (1..100000)",
+    score="Optional new damage (1..100000)",
     player="Optional new player name",
 )
-async def edit(interaction: discord.Interaction, submission_id: int, score: int, player: str | None = None):
+async def edit(
+    interaction: discord.Interaction,
+    submission_id: int,
+    score: int | None = None,
+    player: str | None = None,
+):
     member = interaction.user
     if not isinstance(member, discord.Member) or not utils.has_commander_role(member):
-        await interaction.response.send_message("Nope. Only **Clan Commanders** can edit damage.", ephemeral=True)
+        await interaction.response.send_message("Nope. Only **Clan Commanders** can edit submissions.", ephemeral=True)
         return
-    if not (1 <= score <= config.MAX_SCORE):
+    if score is not None and not (1 <= score <= config.MAX_SCORE):
         await interaction.response.send_message(f"Damage must be between 1 and {config.MAX_SCORE}.", ephemeral=True)
+        return
+    if score is None and (player is None or not player.strip()):
+        await interaction.response.send_message(
+            "Provide at least one field to edit: `score` and/or `player`.",
+            ephemeral=True,
+        )
         return
     await interaction.response.defer(ephemeral=True)
 
@@ -452,6 +463,9 @@ async def edit(interaction: discord.Interaction, submission_id: int, score: int,
             ephemeral=True,
         )
         return
+    if updated.get("unchanged"):
+        await interaction.followup.send("No changes were applied (submission already has those values).", ephemeral=True)
+        return
 
     tank_name = updated["tank_name"]
     tank = await db.get_tank_canonical(tank_name)
@@ -472,9 +486,9 @@ async def edit(interaction: discord.Interaction, submission_id: int, score: int,
         ),
     )
 
-    notice = await _refresh_webpage_notice(context="Damage edit saved, but")
+    notice = await _refresh_webpage_notice(context="Submission edit saved, but")
     player_note = ""
-    if updated["old_player_raw"] != updated["new_player_raw"]:
+    if updated["player_changed"]:
         player_note = (
             f"\n👤 Player changed from **{updated['old_player_raw']}** "
             f"to **{updated['new_player_raw']}**."
@@ -483,10 +497,17 @@ async def edit(interaction: discord.Interaction, submission_id: int, score: int,
         player_note += f"\nℹ️ {normalized_note}"
     if suggestions:
         player_note += "\n💡 Similar existing names: " + ", ".join([f"**{s}**" for s in suggestions])
+    score_note = ""
+    if updated["score_changed"]:
+        score_note = (
+            f"from **{updated['old_score']}** to **{updated['new_score']}**"
+        )
+    else:
+        score_note = f"(damage unchanged: **{updated['old_score']}**)"
     await interaction.followup.send(
         (
             f"✅ Updated submission **#{submission_id}** on **{tank_name}** "
-            f"from **{updated['old_score']}** to **{updated['new_score']}**."
+            f"{score_note}."
             f"{player_note}\n{notice}"
         ),
         ephemeral=True,
@@ -648,11 +669,36 @@ async def qualify_player_autocomplete(_interaction: discord.Interaction, current
     return [app_commands.Choice(name=n, value=n) for n in names[:25]]
 
 @grp.command(name="history", description="Show recent submissions (grouped) + stats")
-@app_commands.describe(limit="How many recent entries (1-25)")
-async def history(interaction: discord.Interaction, limit: int = 10):
+@app_commands.describe(
+    limit="How many recent entries (1-25)",
+    tier="Optional tier filter (1..10)",
+    type="Optional type filter (light/medium/heavy/td)",
+)
+async def history(
+    interaction: discord.Interaction,
+    limit: int = 10,
+    tier: int | None = None,
+    type: str | None = None,
+):
+    member = interaction.user
+    if not isinstance(member, discord.Member) or not utils.has_commander_role(member):
+        await interaction.response.send_message(
+            "Nope. Only **Clan Commanders** can view submission history.",
+            ephemeral=True,
+        )
+        return
     await interaction.response.defer(ephemeral=True, thinking=True)
     limit = max(1, min(limit, 25))
-    rows = await db.get_recent(limit)
+    if tier is not None and not (1 <= tier <= 10):
+        await interaction.followup.send("Tier must be 1..10.", ephemeral=True)
+        return
+    if type is not None:
+        type = type.strip().lower()
+        if type not in ("light", "medium", "heavy", "td"):
+            await interaction.followup.send("Type must be one of: light, medium, heavy, td.", ephemeral=True)
+            return
+
+    rows = await db.get_recent(limit, tier=tier, ttype=type)
     if not rows:
         await interaction.followup.send("No submissions yet.", ephemeral=True)
         return
@@ -675,7 +721,10 @@ async def history(interaction: discord.Interaction, limit: int = 10):
             lines.append(f"**Tier {tier}**")
             for (_id, player, tank_name, score, submitted_by, created_at, _tier, _ttype) in grouped[ttype][tier]:
                 badge = "🏆 **TOP** " if champ_id is not None and _id == champ_id else ""
-                lines.append(f"{badge}**#{_id}** — **{score}** — **{player}** ({tank_name}) • {utils.fmt_utc(created_at)}")
+                lines.append(
+                    f"{badge}**#{_id}** — **{score}** — **{player}** ({tank_name}) "
+                    f"• Tier {_tier} • {utils.title_case_type(_ttype)} • {utils.fmt_utc(created_at)}"
+                )
             lines.append("")
 
     tops_tanks = await db.top_holders_by_tank(limit=5)

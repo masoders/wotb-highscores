@@ -26,12 +26,14 @@ pip install -U discord.py aiosqlite python-dotenv
 ```
 
 ## Discord Setup
-1) Create a **Forum channel** for the tank index (e.g. `#tank-index`).
-2) Create tags in that forum:
+1) Choose one index destination:
+   - Forum mode: create a **Forum channel** (e.g. `#tank-index`).
+   - Normal mode: create a **Text channel** (e.g. `#tank-index`).
+2) If using forum mode, create tags in that forum:
    - Tier 1 .. Tier 10
    - Light, Medium, Heavy, Tank Destroyer
-3) Invite the bot with permissions on that forum:
-   - Manage Threads
+3) Invite the bot with permissions on the chosen index channel:
+   - Manage Threads (forum mode)
    - Manage Messages
    - Read Message History
    - Send Messages
@@ -43,6 +45,7 @@ GUILD_ID=YOUR_GUILD_ID
 ANNOUNCE_CHANNEL_ID=CHANNEL_FOR_CHAMPION_ANNOUNCEMENTS
 AUDIT_LOG_CHANNEL_ID=PRIVATE_LOG_CHANNEL_ID
 TANK_INDEX_FORUM_CHANNEL_ID=FORUM_CHANNEL_ID
+TANK_INDEX_NORMAL_CHANNEL_ID=TEXT_CHANNEL_ID
 BACKUP_CHANNEL_ID=BACKUP_CHANNEL_ID
 COMMANDER_ROLE_ID=ROLE_ID
 COMMANDER_ROLE_NAME=Clan Commander
@@ -63,6 +66,8 @@ BACKUP_HOUR=3
 BACKUP_MINUTE=0
 BACKUP_TZ=Europe/Helsinki
 ```
+
+`TANK_INDEX_NORMAL_CHANNEL_ID` is optional. If set to a non-zero channel ID, the bot also posts index snapshots as normal text messages in that channel. If both `TANK_INDEX_NORMAL_CHANNEL_ID` and `TANK_INDEX_FORUM_CHANNEL_ID` are set, both destinations are kept updated.
 
 `COMMANDER_ROLE_ID` takes precedence; `COMMANDER_ROLE_NAME` is used only when `COMMANDER_ROLE_ID=0`.
 
