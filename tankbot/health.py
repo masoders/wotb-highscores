@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import discord
 from discord import app_commands
 
-from . import config, db, backup, wg_sync, logging_setup, utils
+from . import config, db, backup, wg_sync, tank_name_sync, logging_setup, metrics, utils, audit_channel
 
 _started_at = dt.datetime.utcnow()
 log = logging.getLogger(__name__)
@@ -68,6 +68,11 @@ def _fmt_bytes(value: int | None) -> str:
             return f"{size:.1f}{unit}"
         size /= 1024.0
     return "n/a"
+
+def _fmt_latency_ms(value: float | None) -> str:
+    if value is None or value < 0:
+        return "n/a"
+    return f"{value:.1f}ms"
 
 def _db_file_stats() -> dict[str, int]:
     def _sz(path: str) -> int:
@@ -170,7 +175,11 @@ async def _probe_dashboard() -> tuple[bool | None, str]:
 
 def _validate_timezones() -> list[str]:
     issues: list[str] = []
-    for key, value in [("BACKUP_TZ", config.BACKUP_TZ), ("WG_REFRESH_TZ", config.WG_REFRESH_TZ)]:
+    for key, value in [
+        ("BACKUP_TZ", config.BACKUP_TZ),
+        ("WG_REFRESH_TZ", config.WG_REFRESH_TZ),
+        ("WG_TANKS_SYNC_TZ", str(getattr(config, "WG_TANKS_SYNC_TZ", "UTC"))),
+    ]:
         try:
             ZoneInfo(str(value))
         except Exception:
@@ -385,6 +394,51 @@ async def system_health(interaction: discord.Interaction):
         if next_wg <= now_wg_local:
             next_wg += dt.timedelta(days=1)
 
+    tank_sync_last_status_fn = getattr(tank_name_sync, "last_tank_sync_status", None)
+    if callable(tank_sync_last_status_fn):
+        last_tank_sync_utc, last_tank_sync_ok, last_tank_sync_msg = tank_sync_last_status_fn()
+    else:
+        last_tank_sync_utc, last_tank_sync_ok, last_tank_sync_msg = None, None, None
+    tank_region = str(getattr(config, "WG_TANKS_API_REGION", "eu")).strip().lower() or "eu"
+    tank_sync_enabled = bool(getattr(config, "WG_TANKS_SYNC_ENABLED", True))
+    tank_sync_day = int(getattr(config, "WG_TANKS_SYNC_DAY", 1) or 1)
+    tank_sync_hour = int(getattr(config, "WG_TANKS_SYNC_HOUR", 4) or 4)
+    tank_sync_minute = int(getattr(config, "WG_TANKS_SYNC_MINUTE", 10) or 10)
+    tank_sync_tz_name = str(getattr(config, "WG_TANKS_SYNC_TZ", "UTC"))
+    if not last_tank_sync_utc:
+        last_tank_sync_utc = await db.get_sync_state(f"wg_tanks:last:{tank_region}")
+    if last_tank_sync_ok is None:
+        stored_tank_sync_ok = await db.get_sync_state(f"wg_tanks:last_ok:{tank_region}")
+        if stored_tank_sync_ok in {"1", "0"}:
+            last_tank_sync_ok = stored_tank_sync_ok == "1"
+    if not last_tank_sync_msg:
+        last_tank_sync_msg = await db.get_sync_state(f"wg_tanks:last_msg:{tank_region}")
+    tank_sync_last_scheduled_fn = getattr(tank_name_sync, "last_scheduled_tank_sync_utc", None)
+    last_scheduled_tank_sync_utc = (
+        tank_sync_last_scheduled_fn() if callable(tank_sync_last_scheduled_fn) else None
+    )
+    if not last_scheduled_tank_sync_utc:
+        last_scheduled_tank_sync_utc = await db.get_sync_state(f"wg_tanks:last_scheduled:{tank_region}")
+    tank_sync_tz = _safe_zoneinfo(tank_sync_tz_name, local_tz)
+    now_tank_sync_local = dt.datetime.now(tank_sync_tz)
+    tank_sync_next_fn = getattr(tank_name_sync, "next_tank_sync_run", None)
+    next_tank_sync = tank_sync_next_fn() if callable(tank_sync_next_fn) else None
+    if next_tank_sync is None and tank_sync_enabled:
+        day = tank_sync_day
+        next_tank_sync = now_tank_sync_local.replace(
+            day=day,
+            hour=tank_sync_hour,
+            minute=tank_sync_minute,
+            second=0,
+            microsecond=0,
+        )
+        if next_tank_sync <= now_tank_sync_local:
+            if next_tank_sync.month == 12:
+                next_tank_sync = next_tank_sync.replace(year=next_tank_sync.year + 1, month=1, day=day)
+            else:
+                next_tank_sync = next_tank_sync.replace(month=next_tank_sync.month + 1, day=day)
+    tank_catalog_count = await db.count_wg_tank_catalog(region=tank_region, active_only=True)
+
     db_files = _db_file_stats()
     proc = _process_metrics()
     pending_tasks = _count_pending_tasks()
@@ -397,6 +451,8 @@ async def system_health(interaction: discord.Interaction):
     bot_ready = bool(main.bot.is_ready())
     bot_closed = bool(main.bot.is_closed())
     guild_count = len(getattr(main.bot, "guilds", []))
+    db_latency_rollup = metrics.db_latency_summary()
+    cmd_latency_rollup = metrics.command_latency_summary()
 
     perm_issues: list[str] = []
     guild = interaction.guild
@@ -435,6 +491,15 @@ async def system_health(interaction: discord.Interaction):
         f"`latency={db_latency_ms:.1f}ms`"
     )
     lines.append(
+        f"- Latency percentiles: "
+        f"`db_ops_p90={_fmt_latency_ms(db_latency_rollup.get('p90_ms'))}` "
+        f"`db_ops_p95={_fmt_latency_ms(db_latency_rollup.get('p95_ms'))}` "
+        f"`db_ops_n={db_latency_rollup.get('count', 0)}` "
+        f"`cmd_p90={_fmt_latency_ms(cmd_latency_rollup.get('p90_ms'))}` "
+        f"`cmd_p95={_fmt_latency_ms(cmd_latency_rollup.get('p95_ms'))}` "
+        f"`cmd_n={cmd_latency_rollup.get('count', 0)}`"
+    )
+    lines.append(
         f"- DB files: `db={_fmt_bytes(db_files.get('db_bytes', -1))}` "
         f"`wal={_fmt_bytes(db_files.get('wal_bytes', -1))}` "
         f"`shm={_fmt_bytes(db_files.get('shm_bytes', -1))}`"
@@ -449,13 +514,28 @@ async def system_health(interaction: discord.Interaction):
     lines.append(
         f"- Next scheduled WG refresh: `{_fmt_local_dt(next_wg, display_tz)}`"
     )
+    lines.append(f"- WG tank-name sync enabled: `{tank_sync_enabled}`")
+    lines.append(f"- Synced WG tank names ({tank_region}): `{tank_catalog_count}`")
+    lines.append(
+        f"- Last WG tank-name sync: "
+        f"`{_fmt_ts(last_tank_sync_utc, display_tz)}` "
+        f"(`{_fmt_ok(last_tank_sync_ok)}`) "
+        f"`{last_tank_sync_msg or 'n/a'}`"
+    )
+    lines.append(
+        f"- Last scheduled WG tank-name sync: `{_fmt_ts(last_scheduled_tank_sync_utc, display_tz)}`"
+    )
+    lines.append(
+        f"- Next scheduled WG tank-name sync: `{_fmt_local_dt(next_tank_sync, display_tz)}`"
+    )
     lines.append(
         f"- Runtime resources: `rss={proc.get('rss','n/a')}` `cpu={proc.get('cpu','n/a')}` `load={proc.get('loadavg','n/a')}` `fds={proc.get('fds','n/a')}`"
     )
     lines.append(
         f"- Queue depth: `pending_asyncio_tasks={pending_tasks}` "
         f"`backup_loop_running={backup.weekly_backup_loop.is_running()}` "
-        f"`wg_loop_running={wg_sync.daily_clan_sync_loop.is_running()}`"
+        f"`wg_loop_running={wg_sync.daily_clan_sync_loop.is_running()}` "
+        f"`tank_sync_loop_running={tank_name_sync.monthly_tank_sync_loop.is_running()}`"
     )
     lines.append(
         f"- Build/runtime: `sha={_git_sha()}` "
@@ -681,6 +761,55 @@ async def system_audit_access(interaction: discord.Interaction):
         await interaction.followup.send("\n".join(lines), ephemeral=True)
     except discord.NotFound:
         return
+
+@system.command(name="sync_tanks", description="Sync WG Blitz encyclopedia tank names now (admins only)")
+async def system_sync_tanks(interaction: discord.Interaction):
+    member = interaction.user
+    if not isinstance(member, discord.Member) or not (member.guild_permissions.manage_guild or member.guild_permissions.administrator):
+        await interaction.response.send_message("Nope. You need **Manage Server** to use this.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    default_region = str(getattr(config, "WG_TANKS_API_REGION", "eu")).strip().lower() or "eu"
+    try:
+        result = await tank_name_sync.sync_now(actor=interaction.user.display_name)
+    except Exception as exc:
+        await interaction.followup.send(
+            f"❌ WG tank-name sync failed: `{type(exc).__name__}: {exc}`",
+            ephemeral=True,
+        )
+        return
+
+    lines = [
+        "✅ WG tank-name sync completed.",
+        f"Region: **{result.get('region', default_region)}**",
+        f"Fetched from API: **{result.get('fetched_count', 0)}**",
+        f"Active cached names: **{result.get('total_active', 0)}**",
+        f"Added: **{result.get('added_count', 0)}**",
+        f"Removed: **{result.get('removed_count', 0)}**",
+        f"Renamed: **{result.get('renamed_count', 0)}**",
+        f"Reactivated: **{result.get('reactivated_count', 0)}**",
+    ]
+
+    try:
+        await audit_channel.send(
+            interaction.client,
+            (
+                "🧾 [tank sync] "
+                f"actor={interaction.user.display_name} "
+                f"region={result.get('region', default_region)} "
+                f"fetched={result.get('fetched_count', 0)} "
+                f"active={result.get('total_active', 0)} "
+                f"added={result.get('added_count', 0)} "
+                f"removed={result.get('removed_count', 0)} "
+                f"renamed={result.get('renamed_count', 0)} "
+                f"reactivated={result.get('reactivated_count', 0)}"
+            ),
+        )
+    except Exception:
+        log.exception("Failed to send tank sync audit message")
+
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 @system.command(name="reload", description="Reload command modules and sync (admins only)")
 async def system_reload(interaction: discord.Interaction):

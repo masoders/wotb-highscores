@@ -499,12 +499,18 @@ tbody tr:hover { background: #253a5a66; }
 def _format_score(score: int | None) -> str:
     if score is None:
         return "-"
-    return f"{int(score):,}"
+    try:
+        iv = int(score)
+    except Exception:
+        return "-"
+    if iv <= 0:
+        return "-"
+    return f"{iv:,}"
 
 
 def _blitzstars_player_url(player_name: str) -> str | None:
     name = (player_name or "").strip()
-    if not name or name == "—":
+    if not name or name in {"—", "-"}:
         return None
     region = (config.WG_API_REGION or "eu").strip().lower()
     return f"https://www.blitzstars.com/player/{quote(region, safe='')}/{quote(name, safe='')}"
@@ -539,9 +545,12 @@ def _render_rows(rows: list[dict]) -> str:
     for i, row in enumerate(rows):
         tank = _safe_web_text(row.get("tank_name"), fallback="Unknown")
         score = row.get("score")
-        player_raw = str(row.get("player_name") or "—")
+        score_val = int(score) if isinstance(score, int) else None
+        player_raw = str(row.get("player_name") or "-")
+        if score_val is None or score_val <= 0:
+            player_raw = "-"
         player = _render_player_link(player_raw)
-        score_text = _safe_web_text(_format_score(score if isinstance(score, int) else None), fallback="-")
+        score_text = _safe_web_text(_format_score(score_val), fallback="-")
         tier = _safe_web_text(row.get("tier"))
         ttype = _safe_web_text(utils.title_case_type(str(row.get("type") or "")))
         player_key = _safe_web_text(player_raw.casefold(), quote=True)
@@ -567,7 +576,11 @@ def _render_rows(rows: list[dict]) -> str:
 def _group_rows_by_player(rows: list[dict]) -> dict[str, list[dict]]:
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
-        player_key = str(row.get("player_name") or "—")
+        score = row.get("score")
+        score_val = int(score) if isinstance(score, int) else None
+        player_key = str(row.get("player_name") or "-")
+        if score_val is None or score_val <= 0:
+            player_key = "-"
         grouped[player_key].append(row)
     return grouped
 
@@ -601,7 +614,7 @@ def _render_player_rows(rows: list[dict]) -> str:
         ttype = _safe_web_text(utils.title_case_type(str(row.get("type") or "")))
         tier = _safe_web_text(row.get("tier"))
         score = row.get("score")
-        score_text = _safe_web_text(_format_score(score if isinstance(score, int) else None), fallback="-")
+        score_text = _safe_web_text(_format_score(int(score) if isinstance(score, int) else None), fallback="-")
         row_class = "data-row latest-submission" if i == latest_idx else "data-row"
         if i == latest_idx:
             tank = f"<strong>{tank}</strong>"
@@ -1238,14 +1251,21 @@ async def generate_leaderboard_page() -> str | None:
 
     recent_changes: list[dict[str, str]] = []
     for cid, action, _sid, tank_name, player_name, old_score, new_score, _actor, created_at, _details in recent_changes_rows:
-        old_text = _format_score(int(old_score)) if old_score is not None else "—"
-        new_text = _format_score(int(new_score)) if new_score is not None else "—"
+        old_text = _format_score(int(old_score)) if old_score is not None else "-"
+        new_text = _format_score(int(new_score)) if new_score is not None else "-"
+        display_player = str(player_name)
+        if str(action).strip().lower() == "delete":
+            try:
+                if new_score is None or int(new_score) <= 0:
+                    display_player = "-"
+            except Exception:
+                display_player = "-"
         recent_changes.append(
             {
                 "id": int(cid),
                 "action": str(action),
                 "tank_name": str(tank_name),
-                "player_name": str(player_name),
+                "player_name": display_player,
                 "score_change": f"{old_text} -> {new_text}",
                 "when": _fmt_local(str(created_at)),
             }

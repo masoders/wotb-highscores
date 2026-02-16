@@ -76,7 +76,26 @@ async def _resolve_tank_for_storage(tank_input: str) -> tuple[tuple[str, int, st
     return None, suggestions
 
 def _format_audit_score(value: int | None) -> str:
-    return "—" if value is None else str(int(value))
+    if value is None:
+        return "-"
+    try:
+        iv = int(value)
+    except Exception:
+        return "-"
+    return "-" if iv <= 0 else str(iv)
+
+
+def _format_audit_player(action: str, player_name: str | None, new_score: int | None) -> str:
+    # Manual delete-revert uses score=0 sentinel for "removed"; show player as "-"
+    # to match score display in audit output.
+    if str(action).strip().lower() == "delete":
+        try:
+            if new_score is None or int(new_score) <= 0:
+                return "-"
+        except Exception:
+            return "-"
+    name = (player_name or "").strip()
+    return name if name else "-"
 
 def _format_name_block(title: str, names: list[str], *, max_names: int = 20) -> str:
     if not names:
@@ -562,12 +581,12 @@ async def delete(interaction: discord.Interaction, submission_id: int, hard_dele
     if hard_delete:
         msg = (
             f"✅ Hard-deleted submission **#{submission_id}** on **{deleted['tank_name']}** "
-            f"(old damage **{deleted['old_score']}**).\n{notice}"
+            f"(old damage **{_format_audit_score(deleted['old_score'])}**).\n{notice}"
         )
     else:
         msg = (
             f"✅ Reverted submission **#{submission_id}** on **{deleted['tank_name']}** "
-            f"from **{deleted['old_score']}** to **{deleted['new_score']}**.\n{notice}"
+            f"from **{_format_audit_score(deleted['old_score'])}** to **{_format_audit_score(deleted['new_score'])}**.\n{notice}"
         )
     await interaction.followup.send(msg, ephemeral=True)
 
@@ -584,9 +603,10 @@ async def changes(interaction: discord.Interaction, limit: int = 20):
         return
     lines = ["**Damage changes**"]
     for _id, action, submission_id, tank_name, player_name, old_score, new_score, actor, created, details in rows:
+        display_player = _format_audit_player(action, player_name, new_score)
         lines.append(
             f"- #{_id} **{action}** submission #{submission_id or '-'} "
-            f"**{player_name}** ({tank_name}) "
+            f"**{display_player}** ({tank_name}) "
             f"`{_format_audit_score(old_score)} -> {_format_audit_score(new_score)}` "
             f"by **{actor}** • {created}"
             + (f" • {details}" if details else "")
@@ -721,8 +741,12 @@ async def history(
             lines.append(f"**Tier {tier}**")
             for (_id, player, tank_name, score, submitted_by, created_at, _tier, _ttype) in grouped[ttype][tier]:
                 badge = "🏆 **TOP** " if champ_id is not None and _id == champ_id else ""
+                score_text = _format_audit_score(score)
+                player_text = str(player or "").strip() or "-"
+                if score_text == "-":
+                    player_text = "-"
                 lines.append(
-                    f"{badge}**#{_id}** — **{score}** — **{player}** ({tank_name}) "
+                    f"{badge}**#{_id}** — **{score_text}** — **{player_text}** ({tank_name}) "
                     f"• Tier {_tier} • {utils.title_case_type(_ttype)} • {utils.fmt_utc(created_at)}"
                 )
             lines.append("")

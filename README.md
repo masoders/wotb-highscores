@@ -61,6 +61,15 @@ WG_REFRESH_MINUTE=0
 WG_REFRESH_TZ=Europe/Helsinki
 WG_API_TIMEOUT_SECONDS=15
 
+WG_TANKS_SYNC_ENABLED=1
+WG_TANKS_API_APPLICATION_ID=c9daca4281064c19f93e714acd0a6967
+WG_TANKS_API_REGION=eu
+WG_TANKS_SYNC_DAY=1
+WG_TANKS_SYNC_HOUR=4
+WG_TANKS_SYNC_MINUTE=10
+WG_TANKS_SYNC_TZ=Europe/Helsinki
+WG_TANKS_API_TIMEOUT_SECONDS=20
+
 BACKUP_WEEKDAY=6
 BACKUP_HOUR=3
 BACKUP_MINUTE=0
@@ -82,6 +91,14 @@ What it does:
 - powers player-name autocomplete in score commands
 
 If you want health output and schedules to look local, set `WG_REFRESH_TZ` and `BACKUP_TZ` to your local timezone.
+
+## WG Tank Name Sync
+What it does:
+- refreshes WG Blitz encyclopedia tank names once per month
+- allows admins to force refresh with `/system sync_tanks`
+- stores names in DB for tank-name suggestions in commands
+
+If you want this schedule to look local in health output, set `WG_TANKS_SYNC_TZ`.
 
 ## Commands
 See `docs.md`.

@@ -43,7 +43,7 @@ def setup(tree: app_commands.CommandTree, *, guild: discord.abc.Snowflake | None
                 "- `/tank merge` — merge duplicate tank into canonical tank",
                 "- `/tank changes|preview_import|import_csv` — tank audit/import",
                 "- `/tank rebuild_index|rebuild_index_missing` — index snapshot rebuild/repair",
-                "- `/system health|audit_access|reload` — runtime health + access audit + command reload",
+                "- `/system health|audit_access|sync_tanks|reload` — runtime health + access audit + WG tank sync + command reload",
                 "",
             ])
 

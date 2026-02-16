@@ -1,7 +1,8 @@
 import aiosqlite
 import difflib
+import time
 from contextlib import asynccontextmanager
-from . import config, utils
+from . import config, metrics, utils
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tanks (
@@ -81,6 +82,27 @@ ON clan_players (region, player_name_raw);
 CREATE INDEX IF NOT EXISTS idx_clan_players_region_norm
 ON clan_players (region, player_name_norm);
 
+CREATE TABLE IF NOT EXISTS wg_tank_catalog (
+    region TEXT NOT NULL,
+    tank_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    name_norm TEXT NOT NULL,
+    tier INTEGER,
+    type TEXT,
+    nation TEXT,
+    is_premium INTEGER NOT NULL DEFAULT 0,
+    is_collectible INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    last_synced_at TEXT NOT NULL,
+    PRIMARY KEY (region, tank_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wg_tank_catalog_region_name
+ON wg_tank_catalog (region, name);
+
+CREATE INDEX IF NOT EXISTS idx_wg_tank_catalog_region_name_norm
+ON wg_tank_catalog (region, name_norm);
+
 CREATE TABLE IF NOT EXISTS sync_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -100,11 +122,63 @@ async def _apply_sqlite_pragmas(db: aiosqlite.Connection):
     await db.execute("PRAGMA journal_mode = WAL;")
     await db.execute("PRAGMA synchronous = NORMAL;")
 
+
+class _InstrumentedConnection:
+    def __init__(self, inner: aiosqlite.Connection):
+        object.__setattr__(self, "_inner", inner)
+
+    async def execute(self, *args, **kwargs):
+        t0 = time.perf_counter()
+        try:
+            return await self._inner.execute(*args, **kwargs)
+        finally:
+            metrics.record_db_latency_ms((time.perf_counter() - t0) * 1000.0)
+
+    async def executemany(self, *args, **kwargs):
+        t0 = time.perf_counter()
+        try:
+            return await self._inner.executemany(*args, **kwargs)
+        finally:
+            metrics.record_db_latency_ms((time.perf_counter() - t0) * 1000.0)
+
+    async def executescript(self, *args, **kwargs):
+        t0 = time.perf_counter()
+        try:
+            return await self._inner.executescript(*args, **kwargs)
+        finally:
+            metrics.record_db_latency_ms((time.perf_counter() - t0) * 1000.0)
+
+    async def commit(self):
+        t0 = time.perf_counter()
+        try:
+            return await self._inner.commit()
+        finally:
+            metrics.record_db_latency_ms((time.perf_counter() - t0) * 1000.0)
+
+    async def rollback(self):
+        t0 = time.perf_counter()
+        try:
+            return await self._inner.rollback()
+        finally:
+            metrics.record_db_latency_ms((time.perf_counter() - t0) * 1000.0)
+
+    def __setattr__(self, name: str, value):
+        # Forward connection attributes (e.g. row_factory) to the wrapped
+        # aiosqlite connection so existing call sites behave identically.
+        if name == "_inner":
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._inner, name, value)
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
 @asynccontextmanager
 async def _connect_db():
     async with aiosqlite.connect(config.DB_PATH) as conn:
-        await _apply_sqlite_pragmas(conn)
-        yield conn
+        wrapped = _InstrumentedConnection(conn)
+        await _apply_sqlite_pragmas(wrapped)
+        yield wrapped
 
 async def _table_columns(db: aiosqlite.Connection, table_name: str) -> set[str]:
     cur = await db.execute(f"PRAGMA table_info({table_name})")
@@ -523,6 +597,34 @@ async def _migration_009_add_clan_player_tracking(db: aiosqlite.Connection):
         """
     )
 
+async def _migration_010_add_wg_tank_catalog(db: aiosqlite.Connection):
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS wg_tank_catalog (
+            region TEXT NOT NULL,
+            tank_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            name_norm TEXT NOT NULL,
+            tier INTEGER,
+            type TEXT,
+            nation TEXT,
+            is_premium INTEGER NOT NULL DEFAULT 0,
+            is_collectible INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            last_synced_at TEXT NOT NULL,
+            PRIMARY KEY (region, tank_id)
+        )
+        """
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wg_tank_catalog_region_name "
+        "ON wg_tank_catalog (region, name)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wg_tank_catalog_region_name_norm "
+        "ON wg_tank_catalog (region, name_norm)"
+    )
+
 async def _run_migrations(db: aiosqlite.Connection):
     migrations = [
         (1, _migration_001_cleanup_submission_indexes),
@@ -534,6 +636,7 @@ async def _run_migrations(db: aiosqlite.Connection):
         (7, _migration_007_add_tank_aliases_table),
         (8, _migration_008_enforce_tank_integrity),
         (9, _migration_009_add_clan_player_tracking),
+        (10, _migration_010_add_wg_tank_catalog),
     ]
     for version, fn in migrations:
         cur = await db.execute(
@@ -607,6 +710,36 @@ async def list_tank_names(query: str = "", limit: int = 25) -> list[str]:
         await cur.close()
     return [str(r[0]) for r in rows if r and r[0]]
 
+async def list_wg_tank_catalog_names(
+    *,
+    region: str,
+    query: str = "",
+    limit: int = 500,
+    active_only: bool = True,
+) -> list[str]:
+    q = (query or "").strip()
+    region_norm = str(region or "").strip().lower()
+    limit = max(1, min(limit, 5000))
+    sql = [
+        "SELECT name",
+        "FROM wg_tank_catalog",
+        "WHERE region = ?",
+    ]
+    args: list[object] = [region_norm]
+    if active_only:
+        sql.append("AND is_active = 1")
+    if q:
+        sql.append("AND name LIKE ?")
+        args.append(f"%{q}%")
+    sql.append("ORDER BY name COLLATE NOCASE ASC")
+    sql.append("LIMIT ?")
+    args.append(limit)
+    async with _connect_db() as db:
+        cur = await db.execute("\n".join(sql), tuple(args))
+        rows = await cur.fetchall()
+        await cur.close()
+    return [str(r[0]) for r in rows if r and r[0]]
+
 async def suggest_tank_names(tank_input: str, limit: int = 3) -> list[str]:
     candidate = (tank_input or "").strip()
     if not candidate:
@@ -620,14 +753,49 @@ async def suggest_tank_names(tank_input: str, limit: int = 3) -> list[str]:
             LIMIT 500
             """
         )
-        rows = await cur.fetchall()
+        roster_rows = await cur.fetchall()
         await cur.close()
-    choices = [str(r[0]) for r in rows if r and r[0]]
-    if not choices:
+    roster_names = [str(r[0]) for r in roster_rows if r and r[0]]
+    alias_rows = await list_tank_aliases(limit=500)
+    external_names = await list_wg_tank_catalog_names(
+        region=str(getattr(config, "WG_TANKS_API_REGION", "eu")).strip().lower() or "eu",
+        query="",
+        limit=2000,
+        active_only=True,
+    )
+
+    deduped: dict[str, str] = {}
+    for value in roster_names:
+        norm = utils.norm_tank_name(value)
+        if norm and norm not in deduped:
+            deduped[norm] = str(value)
+    for alias_raw, _tank_name, _created in alias_rows:
+        norm = utils.norm_tank_name(alias_raw)
+        if norm and norm not in deduped:
+            deduped[norm] = str(alias_raw)
+    for value in external_names:
+        norm = utils.norm_tank_name(value)
+        if norm and norm not in deduped:
+            deduped[norm] = str(value)
+
+    if not deduped:
         return []
+
     exact_norm = utils.norm_tank_name(candidate)
-    filtered = [c for c in choices if utils.norm_tank_name(c) != exact_norm]
-    return difflib.get_close_matches(candidate, filtered, n=max(1, min(limit, 5)), cutoff=0.72)
+    candidates_by_norm = {
+        norm: display
+        for norm, display in deduped.items()
+        if norm != exact_norm
+    }
+    if not candidates_by_norm:
+        return []
+    matched_norms = difflib.get_close_matches(
+        exact_norm,
+        list(candidates_by_norm.keys()),
+        n=max(1, min(limit, 5)),
+        cutoff=0.72,
+    )
+    return [candidates_by_norm[norm] for norm in matched_norms]
 
 async def upsert_tank_alias(alias_raw: str, tank_name: str, created_at: str):
     alias_norm = utils.norm_tank_name(alias_raw)
@@ -732,6 +900,145 @@ async def set_sync_state(key: str, value: str, updated_at: str | None = None):
             (str(key), str(value), ts),
         )
         await conn.commit()
+
+async def count_wg_tank_catalog(*, region: str | None = None, active_only: bool = True) -> int:
+    sql = "SELECT COUNT(*) FROM wg_tank_catalog WHERE 1=1"
+    args: list[object] = []
+    if region is not None:
+        sql += " AND region = ?"
+        args.append(str(region).strip().lower())
+    if active_only:
+        sql += " AND is_active = 1"
+    async with _connect_db() as conn:
+        cur = await conn.execute(sql, tuple(args))
+        row = await cur.fetchone()
+        await cur.close()
+    return int(row[0] if row and row[0] is not None else 0)
+
+async def replace_wg_tank_catalog(
+    *,
+    region: str,
+    tanks: list[tuple[int, str, int | None, str | None, str | None, bool, bool]],
+    synced_at: str,
+) -> dict[str, object]:
+    region_norm = str(region or "").strip().lower()
+    incoming: dict[int, tuple[str, str, int | None, str | None, str | None, int, int]] = {}
+    for tank_id, name, tier, ttype, nation, is_premium, is_collectible in tanks:
+        raw_name = str(name or "").strip()
+        if not raw_name:
+            continue
+        try:
+            tid = int(tank_id)
+        except Exception:
+            continue
+        if tid <= 0:
+            continue
+        normalized = utils.norm_tank_name(raw_name)
+        if not normalized:
+            continue
+        tier_int: int | None
+        try:
+            tier_int = int(tier) if tier is not None else None
+        except Exception:
+            tier_int = None
+        incoming[tid] = (
+            raw_name,
+            normalized,
+            tier_int,
+            str(ttype).strip().lower() if ttype else None,
+            str(nation).strip().lower() if nation else None,
+            1 if bool(is_premium) else 0,
+            1 if bool(is_collectible) else 0,
+        )
+
+    async with _connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT tank_id, name, is_active
+            FROM wg_tank_catalog
+            WHERE region = ?
+            """,
+            (region_norm,),
+        )
+        existing_rows = await cur.fetchall()
+        await cur.close()
+        existing_by_id = {
+            int(row[0]): (str(row[1]), int(row[2]) if row[2] is not None else 0)
+            for row in existing_rows
+        }
+
+        incoming_ids = set(incoming.keys())
+        existing_ids = set(existing_by_id.keys())
+        added_ids = sorted(incoming_ids - existing_ids)
+        removed_ids = sorted(existing_ids - incoming_ids)
+        renamed_count = 0
+        reactivated_count = 0
+        for tank_id in sorted(incoming_ids & existing_ids):
+            old_name, old_active = existing_by_id[tank_id]
+            new_name = incoming[tank_id][0]
+            if old_name != new_name:
+                renamed_count += 1
+            if old_active == 0:
+                reactivated_count += 1
+
+        if incoming:
+            await conn.executemany(
+                """
+                INSERT INTO wg_tank_catalog (
+                    region, tank_id, name, name_norm, tier, type, nation,
+                    is_premium, is_collectible, is_active, last_synced_at
+                )
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(region, tank_id) DO UPDATE SET
+                  name = excluded.name,
+                  name_norm = excluded.name_norm,
+                  tier = excluded.tier,
+                  type = excluded.type,
+                  nation = excluded.nation,
+                  is_premium = excluded.is_premium,
+                  is_collectible = excluded.is_collectible,
+                  is_active = excluded.is_active,
+                  last_synced_at = excluded.last_synced_at
+                """,
+                [
+                    (
+                        region_norm,
+                        tank_id,
+                        values[0],
+                        values[1],
+                        values[2],
+                        values[3],
+                        values[4],
+                        values[5],
+                        values[6],
+                        1,
+                        synced_at,
+                    )
+                    for tank_id, values in incoming.items()
+                ],
+            )
+
+        if removed_ids:
+            placeholders = ",".join("?" for _ in removed_ids)
+            await conn.execute(
+                f"""
+                UPDATE wg_tank_catalog
+                SET is_active = 0, last_synced_at = ?
+                WHERE region = ? AND tank_id IN ({placeholders})
+                """,
+                (synced_at, region_norm, *removed_ids),
+            )
+
+        await conn.commit()
+
+    return {
+        "region": region_norm,
+        "total_active": len(incoming),
+        "added_count": len(added_ids),
+        "removed_count": len(removed_ids),
+        "renamed_count": int(renamed_count),
+        "reactivated_count": int(reactivated_count),
+    }
 
 async def replace_clan_players(
     *,
@@ -1093,7 +1400,7 @@ async def get_best_for_tank(tank_name: str):
         cur = await db.execute("""
         SELECT id, player_name_raw, score, created_at
         FROM submissions
-        WHERE tank_name = ?
+        WHERE tank_name = ? AND score > 0
         ORDER BY score DESC, id ASC
         LIMIT 1;
         """, (tank_name,))
@@ -1115,6 +1422,7 @@ async def list_tanks_with_best_scores():
                 ORDER BY s.score DESC, s.id ASC
             ) AS rn
         FROM submissions s
+        WHERE s.score > 0
     )
     SELECT
         t.name AS tank_name,
@@ -1140,6 +1448,7 @@ async def get_champion():
                s.submitted_by, s.created_at, t.tier, t.type
         FROM submissions s
         JOIN tanks t ON t.name = s.tank_name
+        WHERE s.score > 0
         ORDER BY s.score DESC, s.id ASC
         LIMIT 1;
         """)
@@ -1186,6 +1495,7 @@ async def top_holders_by_tank(limit: int = 10):
                     ORDER BY s.score DESC, s.id ASC
                 ) AS rn
             FROM submissions s
+            WHERE s.score > 0
         )
         SELECT player_name_raw, COUNT(*) AS tops
         FROM ranked
@@ -1214,6 +1524,7 @@ async def top_holders_by_tier_type(limit: int = 10):
                 ) AS rn
             FROM submissions s
             JOIN tanks t ON t.name = s.tank_name
+            WHERE s.score > 0
         )
         SELECT player_name_raw, COUNT(*) AS tops
         FROM ranked
@@ -1241,6 +1552,7 @@ async def stats_top_per_tier(limit_per_tier: int = 3):
                     ) AS rn
                 FROM submissions s
                 JOIN tanks t ON t.name = s.tank_name
+                WHERE s.score > 0
             )
             SELECT tier, rn, tank_name, player_name, score
             FROM ranked
@@ -1702,7 +2014,7 @@ async def get_champion_filtered(tier: int | None = None, ttype: str | None = Non
     JOIN tanks t ON t.name = s.tank_name
     """
     args = []
-    wh = []
+    wh = ["s.score > 0"]
     if tier is not None:
         wh.append("t.tier = ?")
         args.append(tier)
@@ -1737,6 +2049,7 @@ async def best_per_tank_for_bucket(tier: int, type_: str):
           ORDER BY s.score DESC, s.created_at DESC
         ) AS rn
       FROM submissions s
+      WHERE s.score > 0
     )
     SELECT
       t.name AS tank_name,
