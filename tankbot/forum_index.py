@@ -476,7 +476,7 @@ def render_bucket_snapshot_pages(tier: int, type_: str, rows: list[dict]) -> lis
     rows = _sorted_snapshot_rows(rows)
 
     # Build "best per tank" list from rows
-    scored = [r for r in rows if r.get("score") is not None]
+    scored = [r for r in rows if r.get("score") is not None and int(r.get("score") or 0) > 0]
     latest = max(scored, key=lambda r: r.get("created_at", ""), default=None)
     top = max(scored, key=lambda r: r.get("score", 0), default=None)
 
@@ -509,10 +509,13 @@ def render_bucket_snapshot_pages(tier: int, type_: str, rows: list[dict]) -> lis
         score = r.get("score")
         player = _safe_text(r.get("player_name"))
         when = _safe_text(_fmt_local(r["created_at"])) if r.get("created_at") else "—"
+        score_val = int(score) if score is not None else 0
+        score_text = "-" if score is None or score_val <= 0 else str(score_val)
+        player_text = "-" if score is None or score_val <= 0 else player
         table_rows.append([
             tank,
-            "—" if score is None else str(score),
-            player,
+            score_text,
+            player_text,
             when,
         ])
 
@@ -531,7 +534,7 @@ def render_bucket_snapshot(tier: int, type_: str, rows: list[dict]) -> str:
 
     header_lines = [f"{type_label} — Tier {tier}"]
 
-    scored = [r for r in rows if r.get("score") is not None]
+    scored = [r for r in rows if r.get("score") is not None and int(r.get("score") or 0) > 0]
     if scored:
         latest = max(scored, key=lambda r: r.get("created_at") or "")
         top = max(scored, key=lambda r: int(r.get("score") or 0))
@@ -553,12 +556,13 @@ def render_bucket_snapshot(tier: int, type_: str, rows: list[dict]) -> str:
 
     for r in rows:
         tank = _safe_text(r["tank_name"])
-        if r.get("score") is None:
-            table_rows.append([tank, "—", "—", "—"])
+        score_val = int(r.get("score") or 0) if r.get("score") is not None else 0
+        if r.get("score") is None or score_val <= 0:
+            table_rows.append([tank, "-", "-", "—"])
         else:
             when = _safe_text(_fmt_local(r.get("created_at")))
             player = _safe_text(utils.clip(r.get("player_name") or "—", 20))
-            table_rows.append([tank, str(r["score"]), player, when])
+            table_rows.append([tank, str(score_val), player, when])
 
     # Column widths (tweak to taste)
     widths = [28, 6, 20, 20]

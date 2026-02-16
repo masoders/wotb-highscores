@@ -101,11 +101,14 @@ Legend:
   - Description: Create/repair missing index snapshots only.
   - Example: `/tank rebuild_index_missing`
 - `/system health`
-  - Description: Show runtime, DB, backup, WG refresh, and dashboard health.
+  - Description: Show runtime, DB, backup, WG refresh, WG tank-name sync, and dashboard health, including DB/command latency percentiles.
   - Example: `/system health`
 - `/system audit_access`
   - Description: Audit managed channels for bot-required perms, broad access risks, and setup drift.
   - Example: `/system audit_access`
+- `/system sync_tanks`
+  - Description: Run WG Blitz encyclopedia tank-name sync now and refresh suggestion cache.
+  - Example: `/system sync_tanks`
 - `/system reload`
   - Description: Reload command modules and sync slash commands.
   - Example: `/system reload`
@@ -151,6 +154,21 @@ Behavior:
 - Commander-triggered refresh via `/highscore refresh_players`.
 - Players who left tracked clans are removed from `clan_players`.
 - Player-name autocomplete in `/highscore submit|edit|qualify` uses tracked clan players first.
+
+## WG Tank Name Sync
+Required env vars:
+- `WG_TANKS_API_APPLICATION_ID` (default provided)
+
+Optional env vars:
+- `WG_TANKS_SYNC_ENABLED` (`1` default)
+- `WG_TANKS_API_REGION` (`eu|na|com|asia`, default `eu`)
+- `WG_TANKS_SYNC_DAY`, `WG_TANKS_SYNC_HOUR`, `WG_TANKS_SYNC_MINUTE`, `WG_TANKS_SYNC_TZ`
+- `WG_TANKS_API_TIMEOUT_SECONDS`
+
+Behavior:
+- Monthly automatic refresh from `/wotb/encyclopedia/vehicles/`.
+- Admin-triggered refresh via `/system sync_tanks`.
+- Names are cached in DB and used for tank-name suggestions across commands.
 
 
 Admin Server Option:

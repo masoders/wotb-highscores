@@ -103,3 +103,21 @@ WG_REFRESH_MINUTE = max(0, min(59, _int_env("WG_REFRESH_MINUTE", 0)))
 WG_REFRESH_TZ = os.getenv("WG_REFRESH_TZ", "UTC").strip() or "UTC"
 WG_API_TIMEOUT_SECONDS = max(5, min(60, _int_env("WG_API_TIMEOUT_SECONDS", 15)))
 WG_SYNC_ENABLED = bool(WG_API_APPLICATION_ID and WG_CLAN_IDS)
+
+# WG Blitz encyclopedia tank-name sync (suggestions)
+WG_TANKS_API_APPLICATION_ID = os.getenv(
+    "WG_TANKS_API_APPLICATION_ID",
+    "c9daca4281064c19f93e714acd0a6967",
+).strip()
+_wg_tanks_region = os.getenv("WG_TANKS_API_REGION", "eu").strip().lower()
+WG_TANKS_API_REGION = _wg_tanks_region if _wg_tanks_region in {"eu", "na", "com", "asia"} else "eu"
+WG_TANKS_SYNC_DAY = max(1, min(28, _int_env("WG_TANKS_SYNC_DAY", 1)))
+WG_TANKS_SYNC_HOUR = max(0, min(23, _int_env("WG_TANKS_SYNC_HOUR", 4)))
+WG_TANKS_SYNC_MINUTE = max(0, min(59, _int_env("WG_TANKS_SYNC_MINUTE", 10)))
+WG_TANKS_SYNC_TZ = os.getenv("WG_TANKS_SYNC_TZ", "UTC").strip() or "UTC"
+WG_TANKS_API_TIMEOUT_SECONDS = max(5, min(60, _int_env("WG_TANKS_API_TIMEOUT_SECONDS", 20)))
+_wg_tanks_sync_enabled_raw = os.getenv("WG_TANKS_SYNC_ENABLED", "1").strip().lower()
+WG_TANKS_SYNC_ENABLED = (
+    _wg_tanks_sync_enabled_raw in {"1", "true", "yes", "on"}
+    and bool(WG_TANKS_API_APPLICATION_ID)
+)

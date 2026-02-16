@@ -1,10 +1,13 @@
 import discord
 from discord import app_commands
-import datetime as dt
 import importlib
+import inspect
 import logging
+import time
+from collections.abc import Callable
+from typing import Any
 
-from . import config, db, backup, health, logging_setup, static_site, wg_sync
+from . import config, db, backup, health, logging_setup, metrics, static_site, wg_sync, tank_name_sync
 from .commands import help_cmd, highscore, tank, backup_cmd
 
 intents = discord.Intents.default()
@@ -12,25 +15,77 @@ intents.members = True
 
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
+_log = logging.getLogger(__name__)
+
+
+def _wrap_command_callback(callback: Callable[..., Any]):
+    if getattr(callback, "__tankbot_latency_wrapped__", False):
+        return callback
+
+    async def _wrapped(*args, **kwargs):
+        t0 = time.perf_counter()
+        try:
+            result = callback(*args, **kwargs)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+        finally:
+            metrics.record_command_latency_ms((time.perf_counter() - t0) * 1000.0)
+
+    setattr(_wrapped, "__tankbot_latency_wrapped__", True)
+    return _wrapped
+
+
+def _instrument_command(command: Any):
+    callback_attr = None
+    if hasattr(command, "_callback"):
+        callback_attr = "_callback"
+    elif hasattr(command, "callback"):
+        callback_attr = "callback"
+
+    if callback_attr is not None:
+        callback = getattr(command, callback_attr, None)
+        if callable(callback):
+            wrapped = _wrap_command_callback(callback)
+            if wrapped is not callback:
+                try:
+                    setattr(command, callback_attr, wrapped)
+                except Exception as exc:
+                    _log.debug("Failed to instrument command callback (%s): %s", callback_attr, exc)
+
+    for subcommand in list(getattr(command, "commands", ())):
+        _instrument_command(subcommand)
+
+
+def _instrument_registered_commands(guild: discord.Object | None):
+    try:
+        commands = tree.get_commands(guild=guild)
+    except Exception:
+        commands = []
+    for command in commands:
+        _instrument_command(command)
 
 def _guild_obj():
     return discord.Object(id=config.GUILD_ID) if config.GUILD_ID else None
 
 async def _register_and_sync_commands(*, reload_modules: bool = False):
-    global help_cmd, highscore, tank, backup_cmd, health, backup, wg_sync
+    global help_cmd, highscore, tank, backup_cmd, health, backup, wg_sync, tank_name_sync
 
     if reload_modules:
         # Reload dependency modules first so command modules bind fresh imports.
-        from . import utils as _utils, forum_index as _forum_index
+        from . import config as _config, utils as _utils, forum_index as _forum_index
         from . import db as _db
-        from . import backup as _backup, wg_sync as _wg_sync
+        from . import backup as _backup, wg_sync as _wg_sync, tank_name_sync as _tank_name_sync
+        _config = importlib.reload(_config)
         _utils = importlib.reload(_utils)
         _forum_index = importlib.reload(_forum_index)
         _db = importlib.reload(_db)
         _backup = importlib.reload(_backup)
         _wg_sync = importlib.reload(_wg_sync)
+        _tank_name_sync = importlib.reload(_tank_name_sync)
         backup = _backup
         wg_sync = _wg_sync
+        tank_name_sync = _tank_name_sync
 
         help_cmd = importlib.reload(help_cmd)
         highscore = importlib.reload(highscore)
@@ -60,6 +115,7 @@ async def _register_and_sync_commands(*, reload_modules: bool = False):
     tank.register(tree, bot, guild=guild)
     backup_cmd.register(tree, bot, guild=guild)
     tree.add_command(health.system, guild=guild)
+    _instrument_registered_commands(guild)
 
     if guild:
         await tree.sync(guild=guild)
@@ -84,9 +140,12 @@ async def on_ready():
         backup.weekly_backup_loop.start(bot)
     if not wg_sync.daily_clan_sync_loop.is_running():
         wg_sync.daily_clan_sync_loop.start(bot)
+    if not tank_name_sync.monthly_tank_sync_loop.is_running():
+        tank_name_sync.monthly_tank_sync_loop.start(bot)
 
     await _register_and_sync_commands(reload_modules=False)
     await wg_sync.bootstrap_if_needed()
+    await tank_name_sync.bootstrap_if_needed()
 
     try:
         await static_site.generate_leaderboard_page()
