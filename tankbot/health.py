@@ -5,8 +5,6 @@ import os
 import platform
 import subprocess
 import sys
-import urllib.request
-import urllib.error
 from zoneinfo import ZoneInfo
 import discord
 from discord import app_commands
@@ -150,29 +148,6 @@ def _git_sha() -> str:
         _git_sha_cache = "n/a"
     return _git_sha_cache
 
-async def _probe_dashboard() -> tuple[bool | None, str]:
-    if not config.DASHBOARD_ENABLED:
-        return None, "disabled"
-    host = config.DASHBOARD_BIND.strip() or "127.0.0.1"
-    if host in {"0.0.0.0", "::"}:
-        host = "127.0.0.1"
-    host_part = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    url = f"http://{host_part}:{config.DASHBOARD_PORT}/healthz"
-
-    def _do_probe() -> tuple[bool, str]:
-        req = urllib.request.Request(url)
-        if config.DASHBOARD_TOKEN:
-            req.add_header("Authorization", f"Bearer {config.DASHBOARD_TOKEN}")
-        try:
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                return True, f"http {int(resp.status)}"
-        except urllib.error.HTTPError as exc:
-            return False, f"http {int(exc.code)}"
-        except Exception as exc:
-            return False, f"{type(exc).__name__}: {exc}"
-
-    return await asyncio.to_thread(_do_probe)
-
 def _validate_timezones() -> list[str]:
     issues: list[str] = []
     for key, value in [
@@ -185,15 +160,6 @@ def _validate_timezones() -> list[str]:
         except Exception:
             issues.append(f"{key}=invalid({value})")
     return issues
-
-def _dashboard_config_flags() -> list[str]:
-    flags: list[str] = []
-    if config.DASHBOARD_ENABLED and not config.DASHBOARD_TOKEN:
-        flags.append("DASHBOARD_TOKEN missing")
-    bind = (config.DASHBOARD_BIND or "").strip()
-    if config.DASHBOARD_ENABLED and bind not in {"127.0.0.1", "::1", "localhost"}:
-        flags.append(f"DASHBOARD_BIND not loopback ({bind})")
-    return flags
 
 def _count_pending_tasks() -> int:
     try:
@@ -399,6 +365,7 @@ async def system_health(interaction: discord.Interaction):
         last_tank_sync_utc, last_tank_sync_ok, last_tank_sync_msg = tank_sync_last_status_fn()
     else:
         last_tank_sync_utc, last_tank_sync_ok, last_tank_sync_msg = None, None, None
+    tank_game = str(getattr(config, "WG_TANKS_API_GAME", "wotb")).strip().lower() or "wotb"
     tank_region = str(getattr(config, "WG_TANKS_API_REGION", "eu")).strip().lower() or "eu"
     tank_sync_enabled = bool(getattr(config, "WG_TANKS_SYNC_ENABLED", True))
     tank_sync_day = int(getattr(config, "WG_TANKS_SYNC_DAY", 1) or 1)
@@ -406,19 +373,31 @@ async def system_health(interaction: discord.Interaction):
     tank_sync_minute = int(getattr(config, "WG_TANKS_SYNC_MINUTE", 10) or 10)
     tank_sync_tz_name = str(getattr(config, "WG_TANKS_SYNC_TZ", "UTC"))
     if not last_tank_sync_utc:
-        last_tank_sync_utc = await db.get_sync_state(f"wg_tanks:last:{tank_region}")
+        last_tank_sync_utc = (
+            await db.get_sync_state(f"wg_tanks:last:{tank_game}:{tank_region}")
+            or await db.get_sync_state(f"wg_tanks:last:{tank_region}")  # backward compatibility
+        )
     if last_tank_sync_ok is None:
-        stored_tank_sync_ok = await db.get_sync_state(f"wg_tanks:last_ok:{tank_region}")
+        stored_tank_sync_ok = (
+            await db.get_sync_state(f"wg_tanks:last_ok:{tank_game}:{tank_region}")
+            or await db.get_sync_state(f"wg_tanks:last_ok:{tank_region}")  # backward compatibility
+        )
         if stored_tank_sync_ok in {"1", "0"}:
             last_tank_sync_ok = stored_tank_sync_ok == "1"
     if not last_tank_sync_msg:
-        last_tank_sync_msg = await db.get_sync_state(f"wg_tanks:last_msg:{tank_region}")
+        last_tank_sync_msg = (
+            await db.get_sync_state(f"wg_tanks:last_msg:{tank_game}:{tank_region}")
+            or await db.get_sync_state(f"wg_tanks:last_msg:{tank_region}")  # backward compatibility
+        )
     tank_sync_last_scheduled_fn = getattr(tank_name_sync, "last_scheduled_tank_sync_utc", None)
     last_scheduled_tank_sync_utc = (
         tank_sync_last_scheduled_fn() if callable(tank_sync_last_scheduled_fn) else None
     )
     if not last_scheduled_tank_sync_utc:
-        last_scheduled_tank_sync_utc = await db.get_sync_state(f"wg_tanks:last_scheduled:{tank_region}")
+        last_scheduled_tank_sync_utc = (
+            await db.get_sync_state(f"wg_tanks:last_scheduled:{tank_game}:{tank_region}")
+            or await db.get_sync_state(f"wg_tanks:last_scheduled:{tank_region}")  # backward compatibility
+        )
     tank_sync_tz = _safe_zoneinfo(tank_sync_tz_name, local_tz)
     now_tank_sync_local = dt.datetime.now(tank_sync_tz)
     tank_sync_next_fn = getattr(tank_name_sync, "next_tank_sync_run", None)
@@ -444,8 +423,6 @@ async def system_health(interaction: discord.Interaction):
     pending_tasks = _count_pending_tasks()
     failures = logging_setup.recent_failures(limit=3)
     tz_issues = _validate_timezones()
-    config_flags = _dashboard_config_flags()
-    dash_probe_ok, dash_probe_msg = await _probe_dashboard()
 
     bot_latency_ms = float(getattr(main.bot, "latency", 0.0) or 0.0) * 1000.0
     bot_ready = bool(main.bot.is_ready())
@@ -515,7 +492,7 @@ async def system_health(interaction: discord.Interaction):
         f"- Next scheduled WG refresh: `{_fmt_local_dt(next_wg, display_tz)}`"
     )
     lines.append(f"- WG tank-name sync enabled: `{tank_sync_enabled}`")
-    lines.append(f"- Synced WG tank names ({tank_region}): `{tank_catalog_count}`")
+    lines.append(f"- Synced WG tank names ({tank_game}/{tank_region}): `{tank_catalog_count}`")
     lines.append(
         f"- Last WG tank-name sync: "
         f"`{_fmt_ts(last_tank_sync_utc, display_tz)}` "
@@ -543,19 +520,13 @@ async def system_health(interaction: discord.Interaction):
         f"`discord.py={getattr(discord, '__version__', 'n/a')}` "
         f"`started_utc={_started_at.strftime('%Y-%m-%d %H:%M')}`"
     )
-    lines.append(
-        f"- Dashboard: `{config.DASHBOARD_ENABLED}` on `{config.DASHBOARD_BIND}:{config.DASHBOARD_PORT}` "
-        f"`token_set={bool(config.DASHBOARD_TOKEN)}` "
-        f"`probe={_fmt_ok(dash_probe_ok)}` `{dash_probe_msg}`"
-    )
-
     anomaly_bits = [
         f"orphan_submissions={db_diag.get('orphan_submissions', -1)}",
         f"duplicate_index_mappings={db_diag.get('duplicate_index_mappings', -1)}",
     ]
     lines.append(f"- Data integrity: `{' '.join(anomaly_bits)}`")
 
-    cfg_issues = tz_issues + config_flags + perm_issues
+    cfg_issues = tz_issues + perm_issues
     lines.append(f"- Config/permission issues: `{'; '.join(cfg_issues) if cfg_issues else 'none'}`")
 
     if failures:
@@ -762,7 +733,7 @@ async def system_audit_access(interaction: discord.Interaction):
     except discord.NotFound:
         return
 
-@system.command(name="sync_tanks", description="Sync WG Blitz encyclopedia tank names now (admins only)")
+@system.command(name="sync_tanks", description="Sync WG encyclopedia tank names now (admins only)")
 async def system_sync_tanks(interaction: discord.Interaction):
     member = interaction.user
     if not isinstance(member, discord.Member) or not (member.guild_permissions.manage_guild or member.guild_permissions.administrator):
@@ -770,6 +741,7 @@ async def system_sync_tanks(interaction: discord.Interaction):
         return
 
     await interaction.response.defer(ephemeral=True, thinking=True)
+    default_game = str(getattr(config, "WG_TANKS_API_GAME", "wotb")).strip().lower() or "wotb"
     default_region = str(getattr(config, "WG_TANKS_API_REGION", "eu")).strip().lower() or "eu"
     try:
         result = await tank_name_sync.sync_now(actor=interaction.user.display_name)
@@ -782,6 +754,7 @@ async def system_sync_tanks(interaction: discord.Interaction):
 
     lines = [
         "✅ WG tank-name sync completed.",
+        f"Game: **{result.get('game', default_game)}**",
         f"Region: **{result.get('region', default_region)}**",
         f"Fetched from API: **{result.get('fetched_count', 0)}**",
         f"Active cached names: **{result.get('total_active', 0)}**",
@@ -797,6 +770,7 @@ async def system_sync_tanks(interaction: discord.Interaction):
             (
                 "🧾 [tank sync] "
                 f"actor={interaction.user.display_name} "
+                f"game={result.get('game', default_game)} "
                 f"region={result.get('region', default_region)} "
                 f"fetched={result.get('fetched_count', 0)} "
                 f"active={result.get('total_active', 0)} "

@@ -42,14 +42,29 @@ def next_tank_sync_run() -> dt.datetime | None:
     return getattr(monthly_tank_sync_loop, "next_run", None)
 
 
-def _api_base_url(region: str) -> str:
+def _state_key(kind: str, game: str, region: str) -> str:
+    return f"wg_tanks:{kind}:{game}:{region}"
+
+
+def _api_base_url(game: str, region: str) -> str:
     key = (region or "").strip().lower()
-    mapping = {
-        "eu": "https://api.wotblitz.eu",
-        "na": "https://api.wotblitz.com",
-        "com": "https://api.wotblitz.com",
-        "asia": "https://api.wotblitz.asia",
-    }
+    game_key = (game or "").strip().lower()
+    if game_key == "wot":
+        mapping = {
+            "eu": "https://api.worldoftanks.eu",
+            "na": "https://api.worldoftanks.com",
+            "com": "https://api.worldoftanks.com",
+            "asia": "https://api.worldoftanks.asia",
+        }
+    elif game_key == "wotb":
+        mapping = {
+            "eu": "https://api.wotblitz.eu",
+            "na": "https://api.wotblitz.com",
+            "com": "https://api.wotblitz.com",
+            "asia": "https://api.wotblitz.asia",
+        }
+    else:
+        raise ValueError(f"Unsupported WG game for tank sync: {game}")
     if key not in mapping:
         raise ValueError(f"Unsupported WG region for tank sync: {region}")
     return mapping[key]
@@ -98,10 +113,12 @@ async def sync_now(*, actor: str = "system") -> dict[str, object]:
     if not app_id:
         raise RuntimeError("WG_TANKS_API_APPLICATION_ID is not configured")
 
+    game = _cfg_str("WG_TANKS_API_GAME", "wotb").strip().lower() or "wotb"
     region = _cfg_str("WG_TANKS_API_REGION", "eu").strip().lower() or "eu"
     try:
-        base_url = _api_base_url(region)
-        url = f"{base_url}/wotb/encyclopedia/vehicles/"
+        base_url = _api_base_url(game, region)
+        game_path = "wotb" if game == "wotb" else "wot"
+        url = f"{base_url}/{game_path}/encyclopedia/vehicles/"
         params = {"application_id": app_id}
         timeout = aiohttp.ClientTimeout(total=_cfg_int("WG_TANKS_API_TIMEOUT_SECONDS", 20))
 
@@ -157,6 +174,7 @@ async def sync_now(*, actor: str = "system") -> dict[str, object]:
         )
         result["fetched_count"] = len(fetched_rows)
         result["actor"] = actor
+        result["game"] = game
         result["region"] = region
 
         _last_tank_sync_utc = synced_at
@@ -170,9 +188,9 @@ async def sync_now(*, actor: str = "system") -> dict[str, object]:
             f"actor={actor}"
         )
         try:
-            await db.set_sync_state(f"wg_tanks:last:{region}", _last_tank_sync_utc, _last_tank_sync_utc)
-            await db.set_sync_state(f"wg_tanks:last_ok:{region}", "1", _last_tank_sync_utc)
-            await db.set_sync_state(f"wg_tanks:last_msg:{region}", _last_tank_sync_msg, _last_tank_sync_utc)
+            await db.set_sync_state(_state_key("last", game, region), _last_tank_sync_utc, _last_tank_sync_utc)
+            await db.set_sync_state(_state_key("last_ok", game, region), "1", _last_tank_sync_utc)
+            await db.set_sync_state(_state_key("last_msg", game, region), _last_tank_sync_msg, _last_tank_sync_utc)
         except Exception:
             log.exception("Failed to persist wg_tanks:last status")
 
@@ -182,9 +200,9 @@ async def sync_now(*, actor: str = "system") -> dict[str, object]:
         _last_tank_sync_ok = False
         _last_tank_sync_msg = f"{type(exc).__name__}: {exc}"
         try:
-            await db.set_sync_state(f"wg_tanks:last:{region}", _last_tank_sync_utc, _last_tank_sync_utc)
-            await db.set_sync_state(f"wg_tanks:last_ok:{region}", "0", _last_tank_sync_utc)
-            await db.set_sync_state(f"wg_tanks:last_msg:{region}", _last_tank_sync_msg, _last_tank_sync_utc)
+            await db.set_sync_state(_state_key("last", game, region), _last_tank_sync_utc, _last_tank_sync_utc)
+            await db.set_sync_state(_state_key("last_ok", game, region), "0", _last_tank_sync_utc)
+            await db.set_sync_state(_state_key("last_msg", game, region), _last_tank_sync_msg, _last_tank_sync_utc)
         except Exception:
             log.exception("Failed to persist wg_tanks:last failure status")
         raise
@@ -194,9 +212,13 @@ async def bootstrap_if_needed() -> None:
     if not _cfg_bool("WG_TANKS_SYNC_ENABLED", True):
         return
 
+    game = _cfg_str("WG_TANKS_API_GAME", "wotb").strip().lower() or "wotb"
     region = _cfg_str("WG_TANKS_API_REGION", "eu").strip().lower() or "eu"
     active_count = await db.count_wg_tank_catalog(region=region, active_only=True)
-    last_sync = await db.get_sync_state(f"wg_tanks:last:{region}")
+    last_sync = (
+        await db.get_sync_state(_state_key("last", game, region))
+        or await db.get_sync_state(f"wg_tanks:last:{region}")  # backward compatibility
+    )
 
     if active_count > 0 and last_sync:
         last_sync_dt = _parse_utc_iso(last_sync)
@@ -209,7 +231,8 @@ async def bootstrap_if_needed() -> None:
     try:
         result = await sync_now(actor="startup")
         log.info(
-            "WG tank encyclopedia startup sync done: region=%s active=%s added=%s removed=%s",
+            "WG tank encyclopedia startup sync done: game=%s region=%s active=%s added=%s removed=%s",
+            game,
             result.get("region"),
             result.get("total_active"),
             result.get("added_count"),
@@ -240,10 +263,11 @@ async def monthly_tank_sync_loop(bot: discord.Client):
 
     monthly_tank_sync_loop.next_run = _next_monthly_run(now_local + dt.timedelta(seconds=1))
     _last_scheduled_tank_sync_utc = utils.utc_now_z()
+    game = _cfg_str("WG_TANKS_API_GAME", "wotb").strip().lower() or "wotb"
     region = _cfg_str("WG_TANKS_API_REGION", "eu").strip().lower() or "eu"
     try:
         await db.set_sync_state(
-            f"wg_tanks:last_scheduled:{region}",
+            _state_key("last_scheduled", game, region),
             _last_scheduled_tank_sync_utc,
             _last_scheduled_tank_sync_utc,
         )
@@ -253,7 +277,8 @@ async def monthly_tank_sync_loop(bot: discord.Client):
     try:
         result = await sync_now(actor="auto")
         log.info(
-            "WG tank encyclopedia monthly sync done: region=%s active=%s added=%s removed=%s",
+            "WG tank encyclopedia monthly sync done: game=%s region=%s active=%s added=%s removed=%s",
+            game,
             result.get("region"),
             result.get("total_active"),
             result.get("added_count"),
@@ -263,6 +288,7 @@ async def monthly_tank_sync_loop(bot: discord.Client):
             await audit_channel.send(
                 bot,
                 "system|scheduled_tank_name_sync|status=ok|"
+                f"game={game}|"
                 f"region={region}|active={result.get('total_active', 0)}|"
                 f"added={result.get('added_count', 0)}|"
                 f"removed={result.get('removed_count', 0)}",
@@ -275,6 +301,7 @@ async def monthly_tank_sync_loop(bot: discord.Client):
             await audit_channel.send(
                 bot,
                 "system|scheduled_tank_name_sync|status=fail|"
+                f"game={game}|"
                 f"region={region}|error={_last_tank_sync_msg or 'unknown'}",
             )
         except Exception:

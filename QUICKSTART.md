@@ -27,7 +27,7 @@ pip install -r requirements.txt
 
 ## 3. Configure (2 minutes)
 Create `.env` using `SETUP.md` template.
-`COMMANDER_ROLE_ID` takes precedence; `COMMANDER_ROLE_NAME` is used only when the ID is `0`.
+`COMMANDER_ROLE_ID` takes precedence; `COMMANDER_ROLE_NAME` is used only when the ID is not set.
 Minimum required:
 - DISCORD_TOKEN
 - GUILD_ID

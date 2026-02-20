@@ -8,6 +8,10 @@ _SNAPSHOT_MARKER = "_Snapshot page "
 _SNAPSHOT_MARKER_RE = re.compile(r"(?m)^_?Snapshot page \d+/\d+_?$")
 _SNAPSHOT_PAGE_1_RE = re.compile(r"(?m)^_?Snapshot page 1/\d+_?$")
 _INDEX_TITLE_RE = re.compile(r"(?m)^\*\*.+ — Tier \d+\*\*$")
+_TIER_SEPARATOR_MARKER = "_TB_TIER_SEPARATOR_"
+_TIER_SEPARATOR_TIER_RE = re.compile(r"\bTier\s+(\d+)\b")
+_TIER_SEPARATOR_LINE_RE = re.compile(r"(?im)^\s*[─━-]+\s*Tier\s+(\d+)\s*[─━-]+\s*$")
+_FORUM_TIER_SEPARATOR_NAME_RE = re.compile(r"^[-─━]+\s*Tier\s+(\d+)\s*[-─━]+$")
 
 
 def _bucket_title(tier: int, ttype: str) -> str:
@@ -190,13 +194,13 @@ async def targeted_update(bot: discord.Client, tier: int, ttype: str):
 async def rebuild_all(bot: discord.Client):
     _ensure_index_configured()
 
+    normal_channel: discord.TextChannel | None = None
+    forum: discord.ForumChannel | None = None
     if _has_normal_index():
-        channel = await _resolve_normal_channel(bot)
+        normal_channel = await _resolve_normal_channel(bot)
         if bot.user is not None:
-            async for msg in channel.history(limit=5000):
+            async for msg in normal_channel.history(limit=5000):
                 if not msg.author or msg.author.id != bot.user.id:
-                    continue
-                if not _is_index_snapshot_message(msg):
                     continue
                 try:
                     await msg.delete()
@@ -228,14 +232,64 @@ async def rebuild_all(bot: discord.Client):
         await db.clear_index_threads()
 
     buckets = await db.list_tier_type_buckets()
-    for tier, type_ in buckets:
-        await upsert_bucket_thread(bot, int(tier), str(type_))
+    if normal_channel is not None:
+        last_tier: int | None = None
+        for tier, type_ in buckets:
+            if last_tier != int(tier):
+                await normal_channel.send(
+                    _tier_separator_text(int(tier)),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                last_tier = int(tier)
+            await upsert_bucket_message(bot, int(tier), str(type_))
+
+    if forum is not None:
+        # Forum channels show newest threads first. Create threads in reverse bucket
+        # order and add per-tier separator threads so visible order is:
+        # Tier N: Light, Medium, Heavy, TD, then Tier N-1, ...
+        forum_buckets = list(reversed([(int(tier), str(type_)) for tier, type_ in buckets]))
+        prev_tier: int | None = None
+        for tier, type_ in forum_buckets:
+            if prev_tier is not None and tier != prev_tier:
+                await _create_forum_tier_separator_thread(forum, prev_tier)
+            await _upsert_bucket_forum_thread(bot, int(tier), str(type_))
+            prev_tier = int(tier)
+        if prev_tier is not None:
+            await _create_forum_tier_separator_thread(forum, prev_tier)
 
 async def rebuild_missing(bot: discord.Client):
     # Ensure index snapshots exist/are refreshed in every configured destination.
+    normal_channel: discord.TextChannel | None = None
+    separator_tiers: set[int] = set()
+    if _has_normal_index():
+        normal_channel = await _resolve_normal_channel(bot)
+        if bot.user is not None:
+            separator_tiers = await _existing_tier_separators_in_channel(
+                normal_channel,
+                bot_user_id=bot.user.id,
+            )
+
     buckets = await db.list_tier_type_buckets()
     for tier, type_ in buckets:
-        await upsert_bucket_thread(bot, int(tier), str(type_))
+        tier_int = int(tier)
+        if normal_channel is not None:
+            if tier_int not in separator_tiers:
+                await normal_channel.send(
+                    _tier_separator_text(tier_int),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                separator_tiers.add(tier_int)
+            await upsert_bucket_message(bot, int(tier), str(type_))
+
+    if _has_forum_index():
+        forum = await _resolve_forum_channel(bot)
+        for tier, type_ in buckets:
+            await _upsert_bucket_forum_thread(bot, int(tier), str(type_))
+        forum_separator_tiers = await _existing_forum_separator_tiers(forum)
+        for tier in sorted({int(t) for t, _tp in buckets}):
+            if int(tier) in forum_separator_tiers:
+                continue
+            await _create_forum_tier_separator_thread(forum, int(tier))
 
 def _sorted_snapshot_rows(rows: list[dict]) -> list[dict]:
     return sorted(
@@ -298,6 +352,95 @@ def _is_bucket_starter_message(msg: discord.Message, tier: int, ttype: str) -> b
 def _is_index_snapshot_message(msg: discord.Message) -> bool:
     content = msg.content or ""
     return _is_snapshot_page_message(msg) and bool(_INDEX_TITLE_RE.search(content))
+
+
+def _tier_separator_text(tier: int) -> str:
+    return f"━━━━━━━━━━━━━━━━━━ Tier {int(tier)} ━━━━━━━━━━━━━━━━━━"
+
+
+def _is_tier_separator_message(msg: discord.Message) -> bool:
+    return _tier_from_separator_content(msg.content or "") is not None
+
+
+def _tier_from_separator_content(content: str) -> int | None:
+    raw = str(content or "")
+    # Backward compatibility for old separator messages that include marker text.
+    if _TIER_SEPARATOR_MARKER in raw:
+        match = _TIER_SEPARATOR_TIER_RE.search(raw)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except Exception:
+            return None
+
+    match = _TIER_SEPARATOR_LINE_RE.search(raw)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+def _forum_tier_separator_name(tier: int) -> str:
+    return f"──────── Tier {int(tier)} ────────"
+
+
+def _tier_from_forum_separator_name(name: str) -> int | None:
+    match = _FORUM_TIER_SEPARATOR_NAME_RE.match(str(name or "").strip())
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+async def _create_forum_tier_separator_thread(forum: discord.ForumChannel, tier: int):
+    name = _forum_tier_separator_name(int(tier))
+    # Forum threads require starter content; use an invisible char so only
+    # the separator title is visible in the thread list.
+    content = "\u200b"
+    try:
+        await forum.create_thread(
+            name=name,
+            content=content,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    except TypeError:
+        await forum.create_thread(name=name, content=content)
+
+
+async def _existing_forum_separator_tiers(forum: discord.ForumChannel) -> set[int]:
+    out: set[int] = set()
+    for th in list(getattr(forum, "threads", []) or []):
+        tier = _tier_from_forum_separator_name(getattr(th, "name", ""))
+        if tier is not None:
+            out.add(int(tier))
+    try:
+        async for th in forum.archived_threads(limit=1000):
+            tier = _tier_from_forum_separator_name(getattr(th, "name", ""))
+            if tier is not None:
+                out.add(int(tier))
+    except Exception:
+        pass
+    return out
+
+
+async def _existing_tier_separators_in_channel(
+    channel: discord.TextChannel,
+    *,
+    bot_user_id: int,
+) -> set[int]:
+    tiers: set[int] = set()
+    async for msg in channel.history(limit=5000):
+        if not msg.author or msg.author.id != bot_user_id:
+            continue
+        tier = _tier_from_separator_content(msg.content or "")
+        if tier is not None:
+            tiers.add(int(tier))
+    return tiers
 
 async def _recent_snapshot_page_messages(
     thread: discord.Thread,
@@ -469,6 +612,16 @@ async def upsert_bucket_message(bot: discord.Client, tier: int, ttype: str):
             tier=tier,
             ttype=ttype,
         )
+        if starter is None:
+            separators = await _existing_tier_separators_in_channel(
+                channel,
+                bot_user_id=bot.user.id,
+            )
+            if int(tier) not in separators:
+                await channel.send(
+                    _tier_separator_text(int(tier)),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
     await _sync_snapshot_pages_in_channel(bot, channel, starter, pages, tier, ttype)
 
 def render_bucket_snapshot_pages(tier: int, type_: str, rows: list[dict]) -> list[str]:

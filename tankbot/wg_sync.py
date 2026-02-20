@@ -175,6 +175,8 @@ async def _fetch_clan_members(
 async def sync_now(*, actor: str = "system") -> dict[str, object]:
     global _last_wg_sync_utc, _last_wg_sync_ok, _last_wg_sync_msg
 
+    if not config.WG_SYNC_ENABLED:
+        raise RuntimeError("WG_CLAN_SYNC_ENABLED is false")
     if not config.WG_API_APPLICATION_ID:
         raise RuntimeError("WG_API_APPLICATION_ID is not configured")
     if not config.WG_CLAN_IDS:
