@@ -40,45 +40,45 @@ pip install -U discord.py aiosqlite python-dotenv
 
 ## .env
 ```env
-DISCORD_TOKEN=YOUR_TOKEN
-GUILD_ID=YOUR_GUILD_ID
-ANNOUNCE_CHANNEL_ID=CHANNEL_FOR_CHAMPION_ANNOUNCEMENTS
-AUDIT_LOG_CHANNEL_ID=PRIVATE_LOG_CHANNEL_ID
-TANK_INDEX_FORUM_CHANNEL_ID=FORUM_CHANNEL_ID
-TANK_INDEX_NORMAL_CHANNEL_ID=TEXT_CHANNEL_ID
-BACKUP_CHANNEL_ID=BACKUP_CHANNEL_ID
-COMMANDER_ROLE_ID=ROLE_ID
-COMMANDER_ROLE_NAME=Clan Commander
-MAX_SCORE=100000
-DB_PATH=highscores.db
+DISCORD_TOKEN=
+GUILD_ID=
+ANNOUNCE_CHANNEL_ID=
+AUDIT_LOG_CHANNEL_ID=
+TANK_INDEX_FORUM_CHANNEL_ID=
+TANK_INDEX_NORMAL_CHANNEL_ID=
+BACKUP_CHANNEL_ID=
+COMMANDER_ROLE_ID=
+COMMANDER_ROLE_NAME=
+MAX_SCORE=
+DB_PATH=
 
-WG_API_APPLICATION_ID=YOUR_WG_APP_ID
-WG_API_GAME=wotb
-WG_API_REGION=eu
-WG_CLAN_IDS=1172,72484
-WG_REFRESH_HOUR=4
-WG_REFRESH_MINUTE=0
-WG_REFRESH_TZ=Europe/Helsinki
-WG_API_TIMEOUT_SECONDS=15
+WG_API_APPLICATION_ID=
+WG_API_GAME=
+WG_API_REGION=
+WG_CLAN_IDS=
+WG_REFRESH_HOUR=
+WG_REFRESH_MINUTE=
+WG_REFRESH_TZ=
+WG_API_TIMEOUT_SECONDS=
 
-WG_TANKS_SYNC_ENABLED=1
-WG_TANKS_API_APPLICATION_ID=c9daca4281064c19f93e714acd0a6967
-WG_TANKS_API_REGION=eu
-WG_TANKS_SYNC_DAY=1
-WG_TANKS_SYNC_HOUR=4
-WG_TANKS_SYNC_MINUTE=10
-WG_TANKS_SYNC_TZ=Europe/Helsinki
-WG_TANKS_API_TIMEOUT_SECONDS=20
+WG_TANKS_SYNC_ENABLED=
+WG_TANKS_API_APPLICATION_ID=
+WG_TANKS_API_REGION=
+WG_TANKS_SYNC_DAY=
+WG_TANKS_SYNC_HOUR=
+WG_TANKS_SYNC_MINUTE=
+WG_TANKS_SYNC_TZ=
+WG_TANKS_API_TIMEOUT_SECONDS=
 
-BACKUP_WEEKDAY=6
-BACKUP_HOUR=3
-BACKUP_MINUTE=0
-BACKUP_TZ=Europe/Helsinki
+BACKUP_WEEKDAY=
+BACKUP_HOUR=
+BACKUP_MINUTE=
+BACKUP_TZ=
 ```
 
-`TANK_INDEX_NORMAL_CHANNEL_ID` is optional. If set to a non-zero channel ID, the bot also posts index snapshots as normal text messages in that channel. If both `TANK_INDEX_NORMAL_CHANNEL_ID` and `TANK_INDEX_FORUM_CHANNEL_ID` are set, both destinations are kept updated.
+`TANK_INDEX_NORMAL_CHANNEL_ID` is optional. If set, the bot also posts index snapshots as normal text messages in that channel. If both `TANK_INDEX_NORMAL_CHANNEL_ID` and `TANK_INDEX_FORUM_CHANNEL_ID` are set, both destinations are kept updated.
 
-`COMMANDER_ROLE_ID` takes precedence; `COMMANDER_ROLE_NAME` is used only when `COMMANDER_ROLE_ID=0`.
+`COMMANDER_ROLE_ID` takes precedence; `COMMANDER_ROLE_NAME` is used only when `COMMANDER_ROLE_ID` is not set.
 
 ## WG Player Sync
 Configure WG API and one or more clan IDs in `.env`.
@@ -108,10 +108,10 @@ Generated as a static HTML file and refreshed on score/tank updates.
 Manual refresh command (commander): `/highscore refresh_web`
 
 ```env
-WEB_LEADERBOARD_ENABLED=1
-WEB_OUTPUT_PATH=web/leaderboard.html
-WEB_CLAN_NAME=Your Clan Name
-WEB_CLAN_MOTTO=Victory through discipline
+WEB_LEADERBOARD_ENABLED=
+WEB_OUTPUT_PATH=
+WEB_CLAN_NAME=
+WEB_CLAN_MOTTO=
 WEB_BANNER_URL=
 ```
 
@@ -119,10 +119,10 @@ WEB_BANNER_URL=
 Enable weekly backups posted to a locked channel:
 ```env
 BACKUP_CHANNEL_ID=
-BACKUP_WEEKDAY=6
-BACKUP_HOUR=3
-BACKUP_MINUTE=0
-BACKUP_TZ=Europe/Helsinki
+BACKUP_WEEKDAY=
+BACKUP_HOUR=
+BACKUP_MINUTE=
+BACKUP_TZ=
 ```
 
 Commander commands:
@@ -131,7 +131,7 @@ Commander commands:
 - `/backup verify_latest`
 
 ```env
-BACKUP_GUILD_ID=   # Optional admin/backup server ID
+BACKUP_GUILD_ID=
 ```
 
 
@@ -145,9 +145,9 @@ Shows commands available to you based on your role (public, commander, admin).
 
 ## Read-only Web Dashboard
 ```env
-DASHBOARD_ENABLED=1
-DASHBOARD_BIND=127.0.0.1
-DASHBOARD_PORT=8080
+DASHBOARD_ENABLED=
+DASHBOARD_BIND=
+DASHBOARD_PORT=
 DASHBOARD_TOKEN=
 ```
 
@@ -161,13 +161,13 @@ Decrypt helper: `decrypt_backup.py`.
 
 
 ## Reverse Proxy (Caddy)
-Use `Caddyfile.dashboard.example` as a starting point. Keep the dashboard bound to `127.0.0.1` and expose it only via HTTPS reverse proxy.
+Use `Caddyfile.dashboard.example` as a starting point. Keep the dashboard bound to loopback and expose it only via HTTPS reverse proxy.
 
 
 ## Dashboard Security
 - Set `DASHBOARD_TOKEN` to require bearer-token access for dashboard endpoints.
-- Use `Authorization: Bearer <token>` or `?token=` when a token is configured.
-- Keep `DASHBOARD_BIND` on loopback (`127.0.0.1`/`::1`) and expose via HTTPS reverse proxy only.
+- Use your configured dashboard token auth mechanism when token protection is enabled.
+- Keep `DASHBOARD_BIND` on loopback and expose via HTTPS reverse proxy only.
 
 
 ## Self-contained encrypted backups
@@ -189,8 +189,8 @@ Tank names and player names are limited to **64 characters** and must be single-
 ## Logging
 Logs go to console and to a rotating file `tankbot.log` (1MB x 5). Configure via:
 ```env
-LOG_LEVEL=INFO
-LOG_PATH=tankbot.log
+LOG_LEVEL=
+LOG_PATH=
 ```
 
 

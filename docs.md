@@ -141,11 +141,11 @@ Backups require env vars: BACKUP_CHANNEL_ID, BACKUP_WEEKDAY, BACKUP_HOUR, BACKUP
 ## WG Clan Player Sync
 Required env vars:
 - `WG_API_APPLICATION_ID`
-- `WG_API_REGION` (`eu|na|com|asia`)
-- `WG_CLAN_IDS` (comma-separated clan ids)
+- `WG_API_REGION`
+- `WG_CLAN_IDS`
 
 Optional env vars:
-- `WG_API_GAME` (`wotb` default)
+- `WG_API_GAME`
 - `WG_REFRESH_HOUR`, `WG_REFRESH_MINUTE`, `WG_REFRESH_TZ`
 - `WG_API_TIMEOUT_SECONDS`
 
@@ -157,16 +157,16 @@ Behavior:
 
 ## WG Tank Name Sync
 Required env vars:
-- `WG_TANKS_API_APPLICATION_ID` (default provided)
+- `WG_TANKS_API_APPLICATION_ID`
 
 Optional env vars:
-- `WG_TANKS_SYNC_ENABLED` (`1` default)
-- `WG_TANKS_API_REGION` (`eu|na|com|asia`, default `eu`)
+- `WG_TANKS_SYNC_ENABLED`
+- `WG_TANKS_API_REGION`
 - `WG_TANKS_SYNC_DAY`, `WG_TANKS_SYNC_HOUR`, `WG_TANKS_SYNC_MINUTE`, `WG_TANKS_SYNC_TZ`
 - `WG_TANKS_API_TIMEOUT_SECONDS`
 
 Behavior:
-- Monthly automatic refresh from `/wotb/encyclopedia/vehicles/`.
+- Monthly automatic refresh from the WG vehicles encyclopedia endpoint.
 - Admin-triggered refresh via `/system sync_tanks`.
 - Names are cached in DB and used for tank-name suggestions across commands.
 
@@ -187,12 +187,12 @@ Shows commands available to you based on your role (public, commander, admin).
 ## Web Dashboard (Read-only)
 Enable with env vars:
 ```env
-DASHBOARD_ENABLED=1
-DASHBOARD_BIND=127.0.0.1
-DASHBOARD_PORT=8080
-DASHBOARD_TOKEN=   # optional
+DASHBOARD_ENABLED=
+DASHBOARD_BIND=
+DASHBOARD_PORT=
+DASHBOARD_TOKEN=
 ```
-If `DASHBOARD_TOKEN` is set, use `Authorization: Bearer <token>` or `?token=`.
+If `DASHBOARD_TOKEN` is set, include the configured dashboard token in requests.
 
 ## Static Leaderboard Webpage
 The bot can generate a modern static webpage grouped as:
@@ -204,31 +204,31 @@ It is auto-updated whenever scores/tanks are changed and can be manually refresh
 
 Configure via env vars:
 ```env
-WEB_LEADERBOARD_ENABLED=1
-WEB_OUTPUT_PATH=web/leaderboard.html
-WEB_CLAN_NAME=Your Clan Name
-WEB_CLAN_MOTTO=Victory through discipline
-WEB_BANNER_URL=https://example.com/clan-banner.jpg
+WEB_LEADERBOARD_ENABLED=
+WEB_OUTPUT_PATH=
+WEB_CLAN_NAME=
+WEB_CLAN_MOTTO=
+WEB_BANNER_URL=
 ```
 
 
 ## Encrypted Backups (Optional)
 Set:
 ```env
-BACKUP_ENCRYPTION_PASSPHRASE=your-strong-passphrase
-BACKUP_ENCRYPTION_SALT=   # optional; will be generated and printed as SALT_B64
+BACKUP_ENCRYPTION_PASSPHRASE=
+BACKUP_ENCRYPTION_SALT=
 ```
 Backups will be uploaded as `.zip.enc` with a note containing `SALT_B64`.
 To decrypt: use `decrypt_backup.py`.
 
 
 ## Reverse Proxy (Caddy)
-Use `Caddyfile.dashboard.example` as a starting point. Keep the dashboard bound to `127.0.0.1` and expose it only via HTTPS reverse proxy.
+Use `Caddyfile.dashboard.example` as a starting point. Keep the dashboard bound to loopback and expose it only via HTTPS reverse proxy.
 
 
 ## Dashboard Security
 - Set `DASHBOARD_TOKEN` to require bearer-token access.
-- Keep `DASHBOARD_BIND` on loopback (`127.0.0.1`/`::1`) and expose via HTTPS reverse proxy only.
+- Keep `DASHBOARD_BIND` on loopback and expose via HTTPS reverse proxy only.
 - System health probes dashboard `/healthz` when dashboard checks are enabled.
 
 
@@ -251,8 +251,8 @@ Tank names and player names are limited to **64 characters** and must be single-
 ## Logging
 Logs go to console and to a rotating file `tankbot.log` (1MB x 5). Configure via:
 ```env
-LOG_LEVEL=INFO
-LOG_PATH=tankbot.log
+LOG_LEVEL=
+LOG_PATH=
 ```
 
 

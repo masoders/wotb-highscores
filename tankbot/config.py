@@ -40,12 +40,6 @@ BACKUP_VERIFY_MAX_ATTACHMENT_BYTES = max(1, _int_env("BACKUP_VERIFY_MAX_ATTACHME
 BACKUP_VERIFY_MAX_ZIP_BYTES = max(1, _int_env("BACKUP_VERIFY_MAX_ZIP_BYTES", 50 * 1024 * 1024))
 BACKUP_VERIFY_MAX_DB_BYTES = max(1, _int_env("BACKUP_VERIFY_MAX_DB_BYTES", 50 * 1024 * 1024))
 
-# Dashboard (read-only web UI)
-DASHBOARD_ENABLED = os.getenv("DASHBOARD_ENABLED", "0") in ("1", "true", "True", "yes", "YES")
-DASHBOARD_BIND = os.getenv("DASHBOARD_BIND", "127.0.0.1")
-DASHBOARD_PORT = _int_env("DASHBOARD_PORT", 8080)
-DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")  # optional bearer token for access
-
 # Static leaderboard webpage
 WEB_LEADERBOARD_ENABLED = os.getenv("WEB_LEADERBOARD_ENABLED", "1") in ("1", "true", "True", "yes", "YES")
 WEB_OUTPUT_PATH = os.getenv("WEB_OUTPUT_PATH", "web/leaderboard.html")
@@ -102,13 +96,17 @@ WG_REFRESH_HOUR = max(0, min(23, _int_env("WG_REFRESH_HOUR", 4)))
 WG_REFRESH_MINUTE = max(0, min(59, _int_env("WG_REFRESH_MINUTE", 0)))
 WG_REFRESH_TZ = os.getenv("WG_REFRESH_TZ", "UTC").strip() or "UTC"
 WG_API_TIMEOUT_SECONDS = max(5, min(60, _int_env("WG_API_TIMEOUT_SECONDS", 15)))
-WG_SYNC_ENABLED = bool(WG_API_APPLICATION_ID and WG_CLAN_IDS)
+_wg_clan_sync_enabled_raw = os.getenv("WG_CLAN_SYNC_ENABLED", "1").strip().lower()
+WG_CLAN_SYNC_ENABLED = _wg_clan_sync_enabled_raw in {"1", "true", "yes", "on"}
+WG_SYNC_ENABLED = bool(WG_CLAN_SYNC_ENABLED and WG_API_APPLICATION_ID and WG_CLAN_IDS)
 
 # WG Blitz encyclopedia tank-name sync (suggestions)
 WG_TANKS_API_APPLICATION_ID = os.getenv(
     "WG_TANKS_API_APPLICATION_ID",
     "c9daca4281064c19f93e714acd0a6967",
 ).strip()
+_wg_tanks_game = os.getenv("WG_TANKS_API_GAME", "wotb").strip().lower()
+WG_TANKS_API_GAME = _wg_tanks_game if _wg_tanks_game in {"wot", "wotb"} else "wotb"
 _wg_tanks_region = os.getenv("WG_TANKS_API_REGION", "eu").strip().lower()
 WG_TANKS_API_REGION = _wg_tanks_region if _wg_tanks_region in {"eu", "na", "com", "asia"} else "eu"
 WG_TANKS_SYNC_DAY = max(1, min(28, _int_env("WG_TANKS_SYNC_DAY", 1)))

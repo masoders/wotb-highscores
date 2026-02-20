@@ -625,6 +625,7 @@ async def _migration_010_add_wg_tank_catalog(db: aiosqlite.Connection):
         "ON wg_tank_catalog (region, name_norm)"
     )
 
+
 async def _run_migrations(db: aiosqlite.Connection):
     migrations = [
         (1, _migration_001_cleanup_submission_indexes),
@@ -2112,13 +2113,34 @@ async def clear_index_threads():
         await conn.commit()
 
 async def list_tier_type_buckets():
-    sql = "SELECT DISTINCT tier, type FROM tanks ORDER BY tier DESC, type ASC"
+    sql = "SELECT DISTINCT tier, type FROM tanks"
     async with _connect_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(sql)
         rows = await cur.fetchall()
         await cur.close()
-    return [(int(r["tier"]), str(r["type"])) for r in rows]
+    out = [(int(r["tier"]), str(r["type"])) for r in rows]
+
+    def _type_order(value: str) -> int:
+        norm = str(value or "").strip().lower().replace("_", " ").replace("-", " ")
+        if "light" in norm:
+            return 0
+        if "medium" in norm:
+            return 1
+        if "heavy" in norm:
+            return 2
+        if norm == "td" or "destroyer" in norm:
+            return 3
+        return 99
+
+    out.sort(
+        key=lambda item: (
+            -int(item[0]),
+            _type_order(str(item[1])),
+            str(item[1]).strip().casefold(),
+        )
+    )
+    return out
 
 async def list_index_mappings() -> set[tuple[int, str]]:
     sql = "SELECT tier, type FROM tank_index_posts"

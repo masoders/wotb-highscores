@@ -4,12 +4,18 @@ import datetime as dt
 from collections import deque
 from logging.handlers import RotatingFileHandler
 
-def _error_buffer_size() -> int:
-    raw = os.getenv("LOG_HEALTH_ERROR_BUFFER", "20")
+
+def _int_env(key: str, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(key, str(default))
     try:
-        return max(5, int((raw or "").strip()))
+        value = int((raw or "").strip())
     except Exception:
-        return 20
+        value = int(default)
+    return max(int(minimum), value)
+
+
+def _error_buffer_size() -> int:
+    return _int_env("LOG_HEALTH_ERROR_BUFFER", 20, minimum=5)
 
 _ERROR_EVENTS: deque[dict[str, str]] = deque(maxlen=_error_buffer_size())
 
@@ -58,8 +64,8 @@ def setup_logging():
 
     # Rotating file handler
     log_path = os.getenv("LOG_PATH", "tankbot.log")
-    max_bytes = max(1, int(os.getenv("LOG_MAX_BYTES", str(1_000_000))))
-    backup_count = max(1, int(os.getenv("LOG_BACKUP_COUNT", "5")))
+    max_bytes = _int_env("LOG_MAX_BYTES", 1_000_000, minimum=1)
+    backup_count = _int_env("LOG_BACKUP_COUNT", 5, minimum=1)
     try:
         fh = RotatingFileHandler(
             log_path,
