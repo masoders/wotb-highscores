@@ -11,6 +11,11 @@ def _int_env(key: str, default: int) -> int:
     except Exception:
         return int(default)
 
+
+def _bool_env(key: str, default: bool) -> bool:
+    raw = os.getenv(key, "1" if default else "0")
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 GUILD_ID = _int_env("GUILD_ID", 0)
 
@@ -114,8 +119,19 @@ WG_TANKS_SYNC_HOUR = max(0, min(23, _int_env("WG_TANKS_SYNC_HOUR", 4)))
 WG_TANKS_SYNC_MINUTE = max(0, min(59, _int_env("WG_TANKS_SYNC_MINUTE", 10)))
 WG_TANKS_SYNC_TZ = os.getenv("WG_TANKS_SYNC_TZ", "UTC").strip() or "UTC"
 WG_TANKS_API_TIMEOUT_SECONDS = max(5, min(60, _int_env("WG_TANKS_API_TIMEOUT_SECONDS", 20)))
+# HTML filename for Tankopedia static output, including directory.
+WG_TANKS_WEBPAGE_NAME = os.getenv("WG_TANKS_WEBPAGE_NAME", "tanks/index.html").strip() or "tanks/index.html"
 _wg_tanks_sync_enabled_raw = os.getenv("WG_TANKS_SYNC_ENABLED", "1").strip().lower()
 WG_TANKS_SYNC_ENABLED = (
     _wg_tanks_sync_enabled_raw in {"1", "true", "yes", "on"}
     and bool(WG_TANKS_API_APPLICATION_ID)
 )
+
+# WG Blitz Tankopedia browser sync (manual/CLI)
+_wg_tankopedia_region = os.getenv("WG_TANKOPEDIA_REGION", "eu").strip().lower()
+WG_TANKOPEDIA_REGION = (
+    _wg_tankopedia_region if _wg_tankopedia_region in {"eu", "na", "com", "asia"} else "eu"
+)
+WG_TANKOPEDIA_LANGUAGE = os.getenv("WG_TANKOPEDIA_LANGUAGE", "en").strip().lower() or "en"
+WG_TANKOPEDIA_SYNC_ENABLED = _bool_env("WG_TANKOPEDIA_SYNC_ENABLED", True)
+WG_TANKOPEDIA_SYNC_INTERVAL_HOURS = max(1, min(24 * 365, _int_env("WG_TANKOPEDIA_SYNC_INTERVAL_HOURS", 720)))

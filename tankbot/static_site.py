@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from html import escape
 import json
+import os
 from pathlib import Path
 from urllib.parse import quote
 
@@ -417,6 +418,14 @@ tbody tr:hover { background: #253a5a66; }
 }
 .muted { color: var(--muted); }
 .tank-name { color: var(--tank-name-color); }
+.tank-link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dotted #5f7db4;
+}
+.tank-link:hover {
+  text-decoration: underline;
+}
 .player-name { color: var(--player-name-color); }
 .player-link {
   color: inherit;
@@ -525,7 +534,44 @@ def _render_player_link(player_name: str) -> str:
     return f"<a class=\"player-link\" href=\"{safe_url}\" target=\"_blank\" rel=\"noopener noreferrer\">{safe_name}</a>"
 
 
-def _render_rows(rows: list[dict]) -> str:
+def _tankopedia_relative_href() -> str | None:
+    target_raw = str(getattr(config, "WG_TANKS_WEBPAGE_NAME", "") or "").strip()
+    if not target_raw:
+        return None
+    source_path = Path(str(config.WEB_OUTPUT_PATH or "web/leaderboard.html"))
+    source_dir = source_path.parent if str(source_path.parent) not in {"", "."} else Path(".")
+    target_path = Path(target_raw)
+    try:
+        rel = os.path.relpath(str(target_path), start=str(source_dir))
+    except Exception:
+        rel = str(target_path)
+    rel = str(rel or "").replace("\\", "/").strip()
+    return rel or None
+
+
+def _render_tank_link(
+    tank_name: str,
+    *,
+    tankopedia_href: str | None,
+    tankopedia_names_norm: set[str],
+) -> str:
+    safe_name = _safe_web_text(tank_name, fallback="Unknown")
+    if not tankopedia_href:
+        return safe_name
+    norm = utils.norm_tank_name(str(tank_name or ""))
+    if not norm or norm not in tankopedia_names_norm:
+        return safe_name
+    href = f"{tankopedia_href}?q={quote(str(tank_name or ''), safe='')}"
+    safe_href = _safe_web_text(href, quote=True)
+    return f"<a class=\"tank-link\" href=\"{safe_href}\">{safe_name}</a>"
+
+
+def _render_rows(
+    rows: list[dict],
+    *,
+    tankopedia_href: str | None,
+    tankopedia_names_norm: set[str],
+) -> str:
     out: list[str] = []
     latest_idx = -1
     latest_key: tuple[str, int, str] | None = None
@@ -543,7 +589,12 @@ def _render_rows(rows: list[dict]) -> str:
             latest_idx = i
 
     for i, row in enumerate(rows):
-        tank = _safe_web_text(row.get("tank_name"), fallback="Unknown")
+        tank_raw = str(row.get("tank_name") or "")
+        tank = _render_tank_link(
+            tank_raw,
+            tankopedia_href=tankopedia_href,
+            tankopedia_names_norm=tankopedia_names_norm,
+        )
         score = row.get("score")
         score_val = int(score) if isinstance(score, int) else None
         player_raw = str(row.get("player_name") or "-")
@@ -585,7 +636,12 @@ def _group_rows_by_player(rows: list[dict]) -> dict[str, list[dict]]:
     return grouped
 
 
-def _render_player_rows(rows: list[dict]) -> str:
+def _render_player_rows(
+    rows: list[dict],
+    *,
+    tankopedia_href: str | None,
+    tankopedia_names_norm: set[str],
+) -> str:
     out: list[str] = []
     sorted_rows = sorted(
         rows,
@@ -610,7 +666,12 @@ def _render_player_rows(rows: list[dict]) -> str:
             latest_idx = i
 
     for i, row in enumerate(sorted_rows):
-        tank = _safe_web_text(row.get("tank_name"), fallback="Unknown")
+        tank_raw = str(row.get("tank_name") or "")
+        tank = _render_tank_link(
+            tank_raw,
+            tankopedia_href=tankopedia_href,
+            tankopedia_names_norm=tankopedia_names_norm,
+        )
         ttype = _safe_web_text(utils.title_case_type(str(row.get("type") or "")))
         tier = _safe_web_text(row.get("tier"))
         score = row.get("score")
@@ -635,7 +696,12 @@ def _render_player_rows(rows: list[dict]) -> str:
     return "".join(out)
 
 
-def _render_player_blocks(rows: list[dict]) -> str:
+def _render_player_blocks(
+    rows: list[dict],
+    *,
+    tankopedia_href: str | None,
+    tankopedia_names_norm: set[str],
+) -> str:
     grouped = _group_rows_by_player(rows)
     out: list[str] = []
     for player in sorted(grouped.keys(), key=lambda p: p.casefold()):
@@ -659,7 +725,7 @@ def _render_player_blocks(rows: list[dict]) -> str:
                 "<col class=\"col-p-score\" />"
                 "</colgroup>",
                 "<thead><tr><th>Tank</th><th>Type</th><th>Tier</th><th class=\"score-head\">Damage</th></tr></thead>",
-                f"<tbody>{_render_player_rows(player_rows)}</tbody>",
+                f"<tbody>{_render_player_rows(player_rows, tankopedia_href=tankopedia_href, tankopedia_names_norm=tankopedia_names_norm)}</tbody>",
                 "</table>",
                 "</div>",
                 "</details>",
@@ -668,7 +734,12 @@ def _render_player_blocks(rows: list[dict]) -> str:
     return "".join(out)
 
 
-def _render_stats_top_per_tier(rows: list[tuple[int, int, str, str, int]]) -> str:
+def _render_stats_top_per_tier(
+    rows: list[tuple[int, int, str, str, int]],
+    *,
+    tankopedia_href: str | None,
+    tankopedia_names_norm: set[str],
+) -> str:
     grouped: dict[int, list[tuple[int, int, str, str, int]]] = defaultdict(list)
     for tier, rank, tank_name, player_name, score in rows:
         grouped[int(tier)].append((int(tier), int(rank), str(tank_name), str(player_name), int(score)))
@@ -689,12 +760,17 @@ def _render_stats_top_per_tier(rows: list[tuple[int, int, str, str, int]]) -> st
             ]
         )
         for _tier, rank, tank_name, player_name, score in grouped[tier]:
+            tank_link = _render_tank_link(
+                tank_name,
+                tankopedia_href=tankopedia_href,
+                tankopedia_names_norm=tankopedia_names_norm,
+            )
             out.append(
                 "<tr>"
                 f"<td class=\"stats-rank\">{rank}</td>"
                 f"<td class=\"stats-score\">{_safe_web_text(_format_score(score), fallback='-')}</td>"
                 f"<td class=\"player-name\">{_render_player_link(player_name)}</td>"
-                f"<td class=\"tank-name\">{_safe_web_text(tank_name)}</td>"
+                f"<td class=\"tank-name\">{tank_link}</td>"
                 "</tr>"
             )
         out.extend(["</tbody>", "</table>", "</div>", "</details>"])
@@ -703,17 +779,27 @@ def _render_stats_top_per_tier(rows: list[tuple[int, int, str, str, int]]) -> st
     return "".join(out)
 
 
-def _render_stats_tanks(rows: list[tuple[str, int]]) -> str:
+def _render_stats_tanks(
+    rows: list[tuple[str, int]],
+    *,
+    tankopedia_href: str | None,
+    tankopedia_names_norm: set[str],
+) -> str:
     out: list[str] = [
         "<table class=\"stats-table\">",
         "<thead><tr><th class=\"stats-rank\">#</th><th>Tank</th><th class=\"stats-count\">Submissions</th></tr></thead>",
         "<tbody>",
     ]
     for i, (tank_name, count) in enumerate(rows, start=1):
+        tank_link = _render_tank_link(
+            tank_name,
+            tankopedia_href=tankopedia_href,
+            tankopedia_names_norm=tankopedia_names_norm,
+        )
         out.append(
             "<tr>"
             f"<td class=\"stats-rank\">{i}</td>"
-            f"<td class=\"tank-name\">{_safe_web_text(tank_name)}</td>"
+            f"<td class=\"tank-name\">{tank_link}</td>"
             f"<td class=\"stats-count\">{int(count)}</td>"
             "</tr>"
         )
@@ -1039,6 +1125,8 @@ def _render_html(
     yearly_rows: list[tuple[str, int]],
     monthly_rows: list[tuple[str, int]],
     data_blob: str,
+    tankopedia_href: str | None,
+    tankopedia_names_norm: set[str],
 ) -> str:
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     banner = ""
@@ -1123,7 +1211,11 @@ def _render_html(
             "</div>",
             "<div class=\"stats-card\">",
             "<h3 class=\"stats-title\">Top 10 Most Recorded Tanks</h3>",
-            _render_stats_tanks(top_tanks_rows),
+            _render_stats_tanks(
+                top_tanks_rows,
+                tankopedia_href=tankopedia_href,
+                tankopedia_names_norm=tankopedia_names_norm,
+            ),
             "</div>",
             "<div class=\"stats-card\">",
             "<h3 class=\"stats-title\">Submissions Per Year</h3>",
@@ -1140,7 +1232,11 @@ def _render_html(
             "</div>",
             "<div class=\"stats-card stats-card-wide\">",
             "<h3 class=\"stats-title\">Top 3 Per Tier (all tanks)</h3>",
-            _render_stats_top_per_tier(top_per_tier_rows),
+            _render_stats_top_per_tier(
+                top_per_tier_rows,
+                tankopedia_href=tankopedia_href,
+                tankopedia_names_norm=tankopedia_names_norm,
+            ),
             "</div>",
             "</div>",
             "</div>",
@@ -1180,7 +1276,7 @@ def _render_html(
                     "<col class=\"col-player\" />"
                     "</colgroup>",
                     "<thead><tr><th>Tank</th><th class=\"score-head\">Damage</th><th>Player</th></tr></thead>",
-                    f"<tbody>{_render_rows(rows)}</tbody>",
+                    f"<tbody>{_render_rows(rows, tankopedia_href=tankopedia_href, tankopedia_names_norm=tankopedia_names_norm)}</tbody>",
                     "</table>",
                     "</div>",
                     "</details>",
@@ -1195,7 +1291,11 @@ def _render_html(
             "<div class=\"tier-card\">",
             "<div class=\"tier-body\">",
             "<div data-player-list>",
-            _render_player_blocks(player_rows),
+            _render_player_blocks(
+                player_rows,
+                tankopedia_href=tankopedia_href,
+                tankopedia_names_norm=tankopedia_names_norm,
+            ),
             "</div>",
             "</div>",
             "</div>",
@@ -1223,6 +1323,13 @@ async def generate_leaderboard_page() -> str | None:
         return None
 
     tanks = await db.list_tanks()
+    tankopedia_names = await db.list_tankopedia_tank_names()
+    tankopedia_names_norm = {
+        utils.norm_tank_name(name)
+        for name in tankopedia_names
+        if str(name or "").strip()
+    }
+    tankopedia_href = _tankopedia_relative_href()
     top_per_tier_rows = await db.stats_top_per_tier(limit_per_tier=3)
     top_tanks_rows = await db.stats_most_recorded_tanks(limit=10)
     unique_player_count = await db.stats_unique_player_count()
@@ -1310,6 +1417,8 @@ async def generate_leaderboard_page() -> str | None:
         yearly_rows=yearly_rows,
         monthly_rows=monthly_rows,
         data_blob=_json_for_html(data_payload),
+        tankopedia_href=tankopedia_href,
+        tankopedia_names_norm=tankopedia_names_norm,
     )
     output_path = Path(config.WEB_OUTPUT_PATH)
     output_path.parent.mkdir(parents=True, exist_ok=True)

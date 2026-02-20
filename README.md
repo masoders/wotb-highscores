@@ -69,6 +69,12 @@ WG_TANKS_SYNC_HOUR=
 WG_TANKS_SYNC_MINUTE=
 WG_TANKS_SYNC_TZ=
 WG_TANKS_API_TIMEOUT_SECONDS=
+WG_TANKS_WEBPAGE_NAME=
+
+WG_TANKOPEDIA_REGION=
+WG_TANKOPEDIA_LANGUAGE=
+WG_TANKOPEDIA_SYNC_ENABLED=
+WG_TANKOPEDIA_SYNC_INTERVAL_HOURS=
 
 BACKUP_WEEKDAY=
 BACKUP_HOUR=
@@ -99,6 +105,32 @@ What it does:
 - stores names in DB for tank-name suggestions in commands
 
 If you want this schedule to look local in health output, set `WG_TANKS_SYNC_TZ`.
+
+## Tankopedia Browser (Static)
+Command:
+```bash
+python -m tankbot.tools.sync_tankopedia
+```
+
+What it does:
+- checks WG `tanks_updated_at` via `/wotb/encyclopedia/info/`
+- skips fetch when unchanged (`unchanged; skipped`)
+- fetches vehicles from `/wotb/encyclopedia/vehicles/`
+- stores full tank payload (including vehicle characteristics) in SQLite
+- generates static browser files:
+  - `tanks/index.html`
+  - `tanks/app.js`
+  - `tanks/styles.css`
+  - `tanks/tanks.json`
+
+Output HTML filename is controlled by:
+- `WG_TANKS_WEBPAGE_NAME`
+  - Value must include directory and filename (example: `tanks/index.html`)
+
+Optional flags:
+```bash
+python -m tankbot.tools.sync_tankopedia --force --output-dir tanks
+```
 
 ## Commands
 See `docs.md`.

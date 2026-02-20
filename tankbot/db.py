@@ -1,5 +1,6 @@
 import aiosqlite
 import difflib
+import json
 import time
 from contextlib import asynccontextmanager
 from . import config, metrics, utils
@@ -102,6 +103,34 @@ ON wg_tank_catalog (region, name);
 
 CREATE INDEX IF NOT EXISTS idx_wg_tank_catalog_region_name_norm
 ON wg_tank_catalog (region, name_norm);
+
+CREATE TABLE IF NOT EXISTS tankopedia_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tankopedia_tanks (
+    tank_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    tier INTEGER,
+    type TEXT,
+    nation TEXT,
+    is_premium INTEGER NOT NULL DEFAULT 0,
+    is_collectible INTEGER NOT NULL DEFAULT 0,
+    images_json TEXT,
+    characteristics_json TEXT,
+    raw_json TEXT NOT NULL,
+    updated_utc TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tankopedia_tanks_tier
+ON tankopedia_tanks (tier);
+
+CREATE INDEX IF NOT EXISTS idx_tankopedia_tanks_type
+ON tankopedia_tanks (type);
+
+CREATE INDEX IF NOT EXISTS idx_tankopedia_tanks_name
+ON tankopedia_tanks (name);
 
 CREATE TABLE IF NOT EXISTS sync_state (
     key TEXT PRIMARY KEY,
@@ -626,6 +655,46 @@ async def _migration_010_add_wg_tank_catalog(db: aiosqlite.Connection):
     )
 
 
+async def _migration_011_add_tankopedia_tables(db: aiosqlite.Connection):
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tankopedia_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tankopedia_tanks (
+            tank_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            tier INTEGER,
+            type TEXT,
+            nation TEXT,
+            is_premium INTEGER NOT NULL DEFAULT 0,
+            is_collectible INTEGER NOT NULL DEFAULT 0,
+            images_json TEXT,
+            characteristics_json TEXT,
+            raw_json TEXT NOT NULL,
+            updated_utc TEXT NOT NULL
+        )
+        """
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tankopedia_tanks_tier "
+        "ON tankopedia_tanks (tier)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tankopedia_tanks_type "
+        "ON tankopedia_tanks (type)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tankopedia_tanks_name "
+        "ON tankopedia_tanks (name)"
+    )
+
+
 async def _run_migrations(db: aiosqlite.Connection):
     migrations = [
         (1, _migration_001_cleanup_submission_indexes),
@@ -638,6 +707,7 @@ async def _run_migrations(db: aiosqlite.Connection):
         (8, _migration_008_enforce_tank_integrity),
         (9, _migration_009_add_clan_player_tracking),
         (10, _migration_010_add_wg_tank_catalog),
+        (11, _migration_011_add_tankopedia_tables),
     ]
     for version, fn in migrations:
         cur = await db.execute(
@@ -1040,6 +1110,219 @@ async def replace_wg_tank_catalog(
         "renamed_count": int(renamed_count),
         "reactivated_count": int(reactivated_count),
     }
+
+
+async def get_tankopedia_meta(key: str) -> str | None:
+    async with _connect_db() as conn:
+        cur = await conn.execute(
+            "SELECT value FROM tankopedia_meta WHERE key = ? LIMIT 1",
+            (str(key),),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+    return str(row[0]) if row and row[0] is not None else None
+
+
+async def count_tankopedia_tanks() -> int:
+    async with _connect_db() as conn:
+        cur = await conn.execute("SELECT COUNT(*) FROM tankopedia_tanks")
+        row = await cur.fetchone()
+        await cur.close()
+    return int(row[0] if row and row[0] is not None else 0)
+
+
+async def list_tankopedia_tank_names() -> list[str]:
+    async with _connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT name
+            FROM tankopedia_tanks
+            ORDER BY name COLLATE NOCASE ASC
+            """
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+    return [str(r[0]) for r in rows if r and r[0]]
+
+
+async def replace_tankopedia_snapshot(
+    *,
+    tanks: list[dict[str, object]],
+    tanks_updated_at: str,
+    region: str,
+    language: str,
+    synced_at: str,
+    schema_version: str = "1",
+) -> dict[str, object]:
+    incoming: dict[int, tuple[str, int | None, str | None, str | None, int, int, str, str, str]] = {}
+    for row in tanks:
+        if not isinstance(row, dict):
+            continue
+        try:
+            tank_id = int(row.get("tank_id"))
+        except Exception:
+            continue
+        if tank_id <= 0:
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        tier_raw = row.get("tier")
+        try:
+            tier = int(tier_raw) if tier_raw is not None else None
+        except Exception:
+            tier = None
+        ttype = str(row.get("type") or "").strip() or None
+        nation = str(row.get("nation") or "").strip() or None
+        is_premium = 1 if bool(row.get("is_premium")) else 0
+        is_collectible = 1 if bool(row.get("is_collectible")) else 0
+        images_json = json.dumps(row.get("images") or {}, ensure_ascii=False, separators=(",", ":"))
+        # Keep a dedicated characteristics blob while still storing full payload in raw_json.
+        characteristics_json = json.dumps(row, ensure_ascii=False, separators=(",", ":"))
+        raw_json = json.dumps(row, ensure_ascii=False, separators=(",", ":"))
+        incoming[tank_id] = (
+            name,
+            tier,
+            ttype,
+            nation,
+            is_premium,
+            is_collectible,
+            images_json,
+            characteristics_json,
+            raw_json,
+        )
+
+    async with _connect_db() as conn:
+        await conn.execute("BEGIN")
+        try:
+            cur = await conn.execute("SELECT tank_id FROM tankopedia_tanks")
+            existing_rows = await cur.fetchall()
+            await cur.close()
+            existing_ids = {int(r[0]) for r in existing_rows}
+            incoming_ids = set(incoming.keys())
+
+            if incoming:
+                await conn.executemany(
+                    """
+                    INSERT INTO tankopedia_tanks (
+                        tank_id, name, tier, type, nation, is_premium, is_collectible,
+                        images_json, characteristics_json, raw_json, updated_utc
+                    )
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(tank_id) DO UPDATE SET
+                      name = excluded.name,
+                      tier = excluded.tier,
+                      type = excluded.type,
+                      nation = excluded.nation,
+                      is_premium = excluded.is_premium,
+                      is_collectible = excluded.is_collectible,
+                      images_json = excluded.images_json,
+                      characteristics_json = excluded.characteristics_json,
+                      raw_json = excluded.raw_json,
+                      updated_utc = excluded.updated_utc
+                    """,
+                    [
+                        (
+                            tank_id,
+                            values[0],
+                            values[1],
+                            values[2],
+                            values[3],
+                            values[4],
+                            values[5],
+                            values[6],
+                            values[7],
+                            values[8],
+                            synced_at,
+                        )
+                        for tank_id, values in incoming.items()
+                    ],
+                )
+
+            removed_ids = sorted(existing_ids - incoming_ids)
+            for idx in range(0, len(removed_ids), 500):
+                chunk = removed_ids[idx:idx + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                await conn.execute(
+                    f"DELETE FROM tankopedia_tanks WHERE tank_id IN ({placeholders})",
+                    tuple(chunk),
+                )
+
+            await conn.executemany(
+                """
+                INSERT INTO tankopedia_meta (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                  value = excluded.value
+                """,
+                [
+                    ("tanks_updated_at", str(tanks_updated_at)),
+                    ("last_sync_utc", str(synced_at)),
+                    ("region", str(region).strip().lower()),
+                    ("language", str(language).strip().lower()),
+                    ("schema_version", str(schema_version)),
+                ],
+            )
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+
+    return {
+        "total_tanks": len(incoming_ids),
+        "added_count": len(incoming_ids - existing_ids),
+        "removed_count": len(existing_ids - incoming_ids),
+        "updated_count": len(incoming_ids & existing_ids),
+    }
+
+
+async def list_tankopedia_tanks_for_export() -> list[dict[str, object]]:
+    async with _connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT
+                tank_id, name, tier, type, nation,
+                is_premium, is_collectible,
+                images_json, characteristics_json, raw_json
+            FROM tankopedia_tanks
+            ORDER BY COALESCE(tier, -1) DESC, type COLLATE NOCASE ASC, name COLLATE NOCASE ASC
+            """
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+
+    out: list[dict[str, object]] = []
+    for row in rows:
+        images_obj: object = {}
+        characteristics_obj: object = {}
+        raw_obj: object = {}
+        try:
+            images_obj = json.loads(str(row[7] or "{}"))
+        except Exception:
+            images_obj = {}
+        try:
+            characteristics_obj = json.loads(str(row[8] or "{}"))
+        except Exception:
+            characteristics_obj = {}
+        try:
+            raw_obj = json.loads(str(row[9] or "{}"))
+        except Exception:
+            raw_obj = {}
+        out.append(
+            {
+                "tank_id": int(row[0]),
+                "name": str(row[1]),
+                "tier": int(row[2]) if row[2] is not None else None,
+                "type": str(row[3]) if row[3] is not None else None,
+                "nation": str(row[4]) if row[4] is not None else None,
+                "is_premium": int(row[5]) if row[5] is not None else 0,
+                "is_collectible": int(row[6]) if row[6] is not None else 0,
+                "images": images_obj,
+                "characteristics": characteristics_obj,
+                "raw": raw_obj,
+            }
+        )
+    return out
 
 async def replace_clan_players(
     *,
