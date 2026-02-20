@@ -23,6 +23,7 @@ startup.out
 
 # Generated static web output
 web/
+tanks/
 
 # OS / editor files
 .DS_Store
