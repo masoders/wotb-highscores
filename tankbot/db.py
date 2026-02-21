@@ -1145,27 +1145,38 @@ async def list_tankopedia_tank_names() -> list[str]:
     return [str(r[0]) for r in rows if r and r[0]]
 
 
-async def list_tankopedia_tank_badges() -> list[tuple[str, int, int]]:
+async def list_tankopedia_tank_badges() -> list[tuple[str, int, int, bool]]:
     async with _connect_db() as conn:
         cur = await conn.execute(
             """
-            SELECT name, is_premium, is_collectible
+            SELECT name, is_premium, is_collectible, raw_json
             FROM tankopedia_tanks
             ORDER BY name COLLATE NOCASE ASC
             """
         )
         rows = await cur.fetchall()
         await cur.close()
-    out: list[tuple[str, int, int]] = []
+    out: list[tuple[str, int, int, bool]] = []
     for row in rows:
         name = str(row[0] or "").strip()
         if not name:
             continue
+        has_description = False
+        try:
+            raw_obj = json.loads(str(row[3] or "{}"))
+            description = raw_obj.get("description") if isinstance(raw_obj, dict) else None
+            if isinstance(description, str):
+                has_description = bool(description.strip())
+            elif description is not None:
+                has_description = True
+        except Exception:
+            has_description = False
         out.append(
             (
                 name,
                 int(row[1]) if row[1] is not None else 0,
                 int(row[2]) if row[2] is not None else 0,
+                has_description,
             )
         )
     return out
