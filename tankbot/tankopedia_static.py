@@ -473,6 +473,8 @@ def _app_js() -> str:
   tanks: [],
   filtered: [],
   expandedIds: new Set(),
+  openTierKeys: new Set(),
+  openTypeKeys: new Set(),
 };
 
 const tierFilter = document.getElementById("tierFilter");
@@ -529,10 +531,11 @@ function titleCaseType(value) {
 function titleCaseWords(value) {
   const raw = toText(value).replaceAll("_", " ").replaceAll("-", " ").trim();
   if (!raw) return "Unknown";
-  return raw
-    .split(/\s+/)
-    .map((part) => part ? `${part[0].toUpperCase()}${part.slice(1).toLowerCase()}` : "")
-    .join(" ");
+  const normalized = raw.replace(/\s+/g, " ").toLowerCase();
+  if (normalized === "uk") return "UK";
+  if (normalized === "ussr") return "USSR";
+  if (normalized === "usa") return "USA";
+  return `${normalized[0].toUpperCase()}${normalized.slice(1)}`;
 }
 
 const TYPE_FILTER_ORDER = ["Light", "Medium", "Heavy", "Tank Destroyer"];
@@ -607,10 +610,34 @@ function flattenScalars(obj, prefix, out) {
   }
 }
 
-function characteristicRows(details) {
+function titleCaseKey(value) {
+  const raw = toText(value)
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replaceAll("_", " ")
+    .replaceAll("-", " ")
+    .trim();
+  if (!raw) return "Other";
+  return raw
+    .split(/\s+/)
+    .map((part) => part ? `${part[0].toUpperCase()}${part.slice(1).toLowerCase()}` : "")
+    .join(" ");
+}
+
+function pathSegments(path) {
+  const raw = toText(path).trim();
+  if (!raw) return [];
+  return raw.match(/[^.[\]]+/g) || [];
+}
+
+function topLevelKeyFromPath(path) {
+  const segments = pathSegments(path);
+  return segments.length ? segments[0] : "";
+}
+
+function allFieldRows(details) {
   const source = (
-    (details && details.characteristics && details.characteristics.default_profile) ||
-    (details && details.characteristics) ||
+    (details && details.raw && typeof details.raw === "object" && details.raw) ||
+    (details && details.characteristics && typeof details.characteristics === "object" && details.characteristics) ||
     {}
   );
   const out = [];
@@ -618,57 +645,110 @@ function characteristicRows(details) {
   return out;
 }
 
-const CHAR_HEADINGS = ["Shells", "Armor", "Speed", "Engine", "Gun", "Turret", "Other"];
+const FIELD_GROUP_LABELS = {
+  tank_id: "Tank",
+  name: "Tank",
+  short_name: "Tank",
+  tier: "Tank",
+  type: "Tank",
+  nation: "Tank",
+  is_premium: "Tank",
+  is_collectible: "Tank",
+  description: "Description",
+  cost: "Cost",
+  price_xp: "Research XP",
+  prices_xp: "Research XP",
+  next_tanks: "Next Tanks",
+  default_profile: "Default Profile",
+  modules_tree: "Modules Tree",
+  guns: "Guns",
+  turrets: "Turrets",
+  engines: "Engines",
+  suspensions: "Suspensions",
+  radios: "Radios",
+  images: "Images",
+};
 
-function classifyCharacteristicKey(key) {
-  const k = toText(key).toLowerCase();
-  if (!k) return "Other";
-  if (
-    k.includes("shell") || k.includes("ammo") || k.includes("penetrat") || k.includes("normalization")
-    || k.includes("ricochet") || k.includes("velocity") || k.includes("caliber")
-  ) {
-    return "Shells";
+const FIELD_GROUP_ORDER = [
+  "Tank",
+  "Description",
+  "Cost",
+  "Research XP",
+  "Next Tanks",
+  "Default Profile: Core",
+  "Default Profile: Armor",
+  "Default Profile: Firepower",
+  "Default Profile: Gun",
+  "Default Profile: Shells",
+  "Default Profile: Turret",
+  "Default Profile: Engine",
+  "Default Profile: Suspension",
+  "Default Profile: Mobility",
+  "Default Profile: Protection",
+  "Default Profile: Misc",
+  "Default Profile",
+  "Modules Tree",
+  "Guns",
+  "Turrets",
+  "Engines",
+  "Suspensions",
+  "Radios",
+  "Images",
+  "Other",
+];
+
+const DEFAULT_PROFILE_SECTION_LABELS = {
+  armor: "Armor",
+  firepower: "Firepower",
+  shot_efficiency: "Firepower",
+  gun: "Gun",
+  gun_id: "Gun",
+  shells: "Shells",
+  turret: "Turret",
+  turret_id: "Turret",
+  engine: "Engine",
+  engine_id: "Engine",
+  suspension: "Suspension",
+  suspension_id: "Suspension",
+  speed_forward: "Mobility",
+  speed_backward: "Mobility",
+  maneuverability: "Mobility",
+  weight: "Mobility",
+  hull_weight: "Mobility",
+  max_weight: "Mobility",
+  hp: "Core",
+  hull_hp: "Core",
+  max_ammo: "Core",
+  signal_range: "Core",
+  battle_level_range_min: "Core",
+  battle_level_range_max: "Core",
+  profile_id: "Core",
+  is_default: "Core",
+  protection: "Protection",
+};
+
+function groupLabelForPath(path) {
+  const segments = pathSegments(path);
+  if (!segments.length) return "Other";
+  const topKey = toText(segments[0]).toLowerCase();
+  if (topKey === "default_profile") {
+    const sectionKey = toText(segments[1]).toLowerCase();
+    if (!sectionKey) return "Default Profile";
+    const sectionLabel = DEFAULT_PROFILE_SECTION_LABELS[sectionKey] || "Misc";
+    return `Default Profile: ${sectionLabel}`;
   }
-  if (k.includes("armor") || k.includes("armour") || k.includes("hull")) {
-    return "Armor";
-  }
-  if (k.includes("engine") || k.includes("power_to_weight") || k.includes("specific_power")) {
-    return "Engine";
-  }
-  if (
-    k.includes("turret") || k.includes("view_range") || k.includes("gun_depression")
-    || k.includes("gun_elevation")
-  ) {
-    return "Turret";
-  }
-  if (
-    k.includes("speed") || k.includes("traverse") || k.includes("rotation")
-    || k.includes("reverse")
-  ) {
-    return "Speed";
-  }
-  if (
-    k.includes("gun") || k.includes("reload") || k.includes("aim") || k.includes("dispersion")
-    || k.includes("dpm") || k.includes("damage") || k.includes("burst")
-  ) {
-    return "Gun";
-  }
-  return "Other";
+  return FIELD_GROUP_LABELS[topKey] || titleCaseKey(topKey) || "Other";
 }
 
-function groupedCharacteristicRows(details) {
-  const grouped = {
-    Shells: [],
-    Armor: [],
-    Speed: [],
-    Engine: [],
-    Gun: [],
-    Turret: [],
-    Other: [],
-  };
-  for (const [k, v] of characteristicRows(details)) {
-    const category = classifyCharacteristicKey(k);
-    grouped[category].push([k, v]);
+function groupedAllFieldRows(details) {
+  const grouped = new Map();
+  for (const [k, v] of allFieldRows(details)) {
+    const group = groupLabelForPath(k);
+    if (!grouped.has(group)) grouped.set(group, []);
+    grouped.get(group).push([k, v]);
+  }
+  for (const rows of grouped.values()) {
+    rows.sort((a, b) => toText(a[0]).localeCompare(toText(b[0]), undefined, { sensitivity: "base" }));
   }
   return grouped;
 }
@@ -690,17 +770,31 @@ function renderCharacteristicBox(title, rows) {
   `;
 }
 
-function renderTankDetailsBox(details) {
-  const rows = [
-    ["tank_id", details.tank_id],
-    ["name", details.name],
-    ["tier", details.tier],
-    ["type", titleCaseType(details.type)],
-    ["nation", titleCaseWords(details.nation)],
-    ["is_premium", Number(details.is_premium) ? "Yes" : "No"],
-    ["is_collectible", Number(details.is_collectible) ? "Yes" : "No"],
-  ];
-  return renderCharacteristicBox("Tank Details", rows);
+function renderAllFieldBoxes(details) {
+  const grouped = groupedAllFieldRows(details);
+  if (!grouped.size) return "<div class=\\"empty\\">No data available.</div>";
+  const ordered = [];
+  for (const group of FIELD_GROUP_ORDER) {
+    if (!grouped.has(group)) continue;
+    ordered.push([group, grouped.get(group)]);
+    grouped.delete(group);
+  }
+  const extras = Array.from(grouped.entries()).sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: "base" }));
+  const visible = [...ordered, ...extras].filter(([group, rows]) => {
+    if (!Array.isArray(rows) || !rows.length) return false;
+    if (group === "Description") {
+      return rows.some(([, value]) => {
+        if (value === null || value === undefined) return false;
+        if (typeof value === "string") return value.trim().length > 0;
+        return true;
+      });
+    }
+    return rows.length > 1;
+  });
+  if (!visible.length) return "<div class=\\"empty\\">No sections with more than one value.</div>";
+  return visible
+    .map(([group, rows]) => renderCharacteristicBox(group, rows))
+    .join("");
 }
 
 function tankStarsHtml(tank) {
@@ -725,11 +819,8 @@ function renderTankRow(tank) {
   const details = tank.details || {};
   const rowId = String(tank.tank_id ?? "");
   const expanded = state.expandedIds.has(rowId);
-  const groupedCharacteristics = groupedCharacteristicRows(details);
   const stars = tankStarsHtml(tank);
-  const boxHtml = [renderTankDetailsBox(details), ...CHAR_HEADINGS.map((heading) => (
-    renderCharacteristicBox(heading, groupedCharacteristics[heading] || [])
-  ))].join("");
+  const boxHtml = renderAllFieldBoxes(details);
 
   return `
     <tr class="data-row ${expanded ? "expanded" : ""}" data-row-id="${esc(rowId)}" tabindex="0" aria-expanded="${expanded ? "true" : "false"}">
@@ -741,7 +832,7 @@ function renderTankRow(tank) {
     <tr class="row-detail">
       <td colspan="4">
         <section class="detail-card">
-          <h4 class="detail-title">Vehicle Characteristics</h4>
+          <h4 class="detail-title">Vehicle Fields (All)</h4>
           <div class="char-grid">${boxHtml}</div>
         </section>
       </td>
@@ -749,7 +840,25 @@ function renderTankRow(tank) {
   `;
 }
 
+function captureOpenSections() {
+  const tierKeys = new Set();
+  const typeKeys = new Set();
+  tankList.querySelectorAll("details.tier-card[open]").forEach((el) => {
+    const tierKey = toText(el.getAttribute("data-tier")).trim();
+    if (tierKey) tierKeys.add(tierKey);
+  });
+  tankList.querySelectorAll("details.type-block[open]").forEach((el) => {
+    const tierKey = toText(el.getAttribute("data-tier")).trim();
+    const typeKey = toText(el.getAttribute("data-type")).trim();
+    if (!tierKey || !typeKey) return;
+    typeKeys.add(`${tierKey}|${typeKey}`);
+  });
+  state.openTierKeys = tierKeys;
+  state.openTypeKeys = typeKeys;
+}
+
 function render() {
+  captureOpenSections();
   resultCount.textContent = `${state.filtered.length} tanks`;
   if (!state.filtered.length) {
     tankList.innerHTML = `<div class="empty">No tanks match current filters.</div>`;
@@ -759,14 +868,18 @@ function render() {
   const grouped = groupByTierAndType(state.filtered);
   const tierKeys = Array.from(grouped.keys()).sort((a, b) => tierNum(b) - tierNum(a));
   tankList.innerHTML = tierKeys.map((tierKey) => {
+    const tierKeyText = toText(tierKey);
     const byType = grouped.get(tierKey);
     const typeKeys = Array.from(byType.keys()).sort((a, b) => titleCaseType(a).localeCompare(titleCaseType(b), undefined, { sensitivity: "base" }));
     const tierCount = Array.from(byType.values()).reduce((sum, rows) => sum + rows.length, 0);
+    const tierOpen = state.openTierKeys.has(tierKeyText);
     const typeHtml = typeKeys.map((typeKey) => {
+      const typeKeyText = toText(typeKey);
+      const typeOpen = state.openTypeKeys.has(`${tierKeyText}|${typeKeyText}`);
       const tanks = byType.get(typeKey);
       const rowHtml = tanks.map((tank) => renderTankRow(tank)).join("");
       return `
-        <details class="type-block" open>
+        <details class="type-block" data-tier="${esc(tierKeyText)}" data-type="${esc(typeKeyText)}"${typeOpen ? " open" : ""}>
           <summary class="type-head">
             <h3 class="type-title">${esc(titleCaseType(typeKey))}</h3>
             <span class="type-count">${tanks.length} tanks</span>
@@ -788,7 +901,7 @@ function render() {
       `;
     }).join("");
     return `
-      <details class="tier-card" open>
+      <details class="tier-card" data-tier="${esc(tierKeyText)}"${tierOpen ? " open" : ""}>
         <summary class="tier-head">
           <h2>Tier ${esc(tierKey)}</h2>
           <span class="tier-count">${tierCount} tanks</span>
@@ -875,7 +988,7 @@ tankList.addEventListener("click", (event) => {
   if (state.expandedIds.has(rowId)) {
     state.expandedIds.delete(rowId);
   } else {
-    state.expandedIds.add(rowId);
+    state.expandedIds = new Set([rowId]);
   }
   render();
 });
@@ -887,6 +1000,19 @@ tankList.addEventListener("keydown", (event) => {
   event.preventDefault();
   row.click();
 });
+
+function openSectionsForExpandedRows() {
+  if (!state.expandedIds.size) return;
+  const rows = tankList.querySelectorAll("tr.data-row");
+  rows.forEach((row) => {
+    const rowId = row.getAttribute("data-row-id") || "";
+    if (!state.expandedIds.has(rowId)) return;
+    const typeBlock = row.closest("details.type-block");
+    if (typeBlock) typeBlock.open = true;
+    const tierCard = row.closest("details.tier-card");
+    if (tierCard) tierCard.open = true;
+  });
+}
 
 async function bootstrap() {
   const res = await fetch("./tanks.json", { cache: "no-store" });
@@ -907,9 +1033,11 @@ async function bootstrap() {
     if (exact.length) {
       state.expandedIds = new Set(exact.map((tank) => String(tank.tank_id ?? "")));
       render();
+      openSectionsForExpandedRows();
     } else if (state.filtered.length) {
       state.expandedIds = new Set([String(state.filtered[0].tank_id ?? "")]);
       render();
+      openSectionsForExpandedRows();
     }
   }
 }

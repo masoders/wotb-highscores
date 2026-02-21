@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 from . import config, db, utils
 
-TYPE_ORDER = {"heavy": 0, "medium": 1, "light": 2, "td": 3}
+TYPE_ORDER = {"light": 0, "medium": 1, "heavy": 2, "td": 3}
 
 
 def _safe_web_text(value: object, *, fallback: str = "—", quote: bool = False) -> str:
@@ -162,6 +162,12 @@ h1 {
   margin: -6px 0 12px;
   color: var(--muted);
   font-size: 0.84rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.legend-item {
+  white-space: nowrap;
 }
 .view-controls {
   display: flex;
@@ -414,7 +420,7 @@ th {
 .col-tier { width: 10%; }
 .col-score { width: 16%; }
 .col-player { width: 30%; }
-.col-tankopedia { width: 10%; }
+.col-tankopedia { width: 12%; }
 .col-p-tank { width: 40%; }
 .col-p-type { width: 18%; }
 .col-p-tier { width: 10%; }
@@ -463,6 +469,16 @@ tbody tr:hover { background: #253a5a66; }
 .tankopedia-head,
 .tankopedia-col {
   text-align: center;
+  white-space: nowrap;
+}
+.tankopedia-icons {
+  display: inline-grid;
+  grid-template-columns: 24px 24px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+  width: 52px;
 }
 .tankopedia-icon {
   display: inline-flex;
@@ -478,6 +494,23 @@ tbody tr:hover { background: #253a5a66; }
 }
 .tankopedia-icon:hover {
   background: #253a5a;
+}
+.tankopedia-scroll {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #e8d2a8;
+  border: 1px solid #7b6640;
+  border-radius: 7px;
+  width: 24px;
+  height: 24px;
+  line-height: 1;
+  background: #1a2234;
+}
+.tankopedia-scroll-empty {
+  visibility: hidden;
+  border-color: transparent;
+  background: transparent;
 }
 .player-link {
   color: inherit;
@@ -537,7 +570,7 @@ tbody tr:hover { background: #253a5a66; }
   .col-tank { width: 58%; }
   .col-score { width: 20%; }
   .col-player { width: 32%; }
-  .col-tankopedia { width: 12%; }
+  .col-tankopedia { width: 14%; }
   .col-p-tank { width: 52%; }
   .col-p-type { width: 20%; }
   .col-p-tier { width: 10%; }
@@ -645,6 +678,7 @@ def _render_tankopedia_icon_link(
     *,
     tankopedia_href: str | None,
     tankopedia_names_norm: set[str],
+    tank_has_description_by_norm: dict[str, bool],
 ) -> str:
     if not tankopedia_href:
         return ""
@@ -654,13 +688,23 @@ def _render_tankopedia_icon_link(
     href = f"{tankopedia_href}?q={quote(str(tank_name or ''), safe='')}"
     safe_href = _safe_web_text(href, quote=True)
     safe_name = _safe_web_text(tank_name, fallback="tank")
-    return (
+    link_icon = (
         f"<a class=\"tankopedia-icon\" href=\"{safe_href}\" "
         f"title=\"Open {safe_name} in Tankopedia\" "
         f"aria-label=\"Open {safe_name} in Tankopedia\">"
         "🔗"
         "</a>"
     )
+    if bool(tank_has_description_by_norm.get(norm, False)):
+        scroll_icon = (
+            "<span class=\"tankopedia-scroll\" title=\"Tank description available\" "
+            "aria-label=\"Tank description available\">"
+            "📜"
+            "</span>"
+        )
+    else:
+        scroll_icon = "<span class=\"tankopedia-scroll tankopedia-scroll-empty\" aria-hidden=\"true\"></span>"
+    return f"<span class=\"tankopedia-icons\">{link_icon}{scroll_icon}</span>"
 
 
 def _render_rows(
@@ -669,6 +713,7 @@ def _render_rows(
     tankopedia_href: str | None,
     tankopedia_names_norm: set[str],
     tank_badges_by_norm: dict[str, tuple[bool, bool]],
+    tank_has_description_by_norm: dict[str, bool],
 ) -> str:
     out: list[str] = []
     latest_idx = -1
@@ -702,6 +747,7 @@ def _render_rows(
             tank_raw,
             tankopedia_href=tankopedia_href,
             tankopedia_names_norm=tankopedia_names_norm,
+            tank_has_description_by_norm=tank_has_description_by_norm,
         )
         score_text = _safe_web_text(_format_score(score_val), fallback="-")
         tier = _safe_web_text(row.get("tier"))
@@ -1238,6 +1284,7 @@ def _render_html(
     tankopedia_href: str | None,
     tankopedia_names_norm: set[str],
     tank_badges_by_norm: dict[str, tuple[bool, bool]],
+    tank_has_description_by_norm: dict[str, bool],
 ) -> str:
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     banner = ""
@@ -1281,7 +1328,11 @@ def _render_html(
         "</div>",
         "</section>",
         "<h2 class=\"section-title\">Leaderboard</h2>",
-        "<p class=\"star-legend\">&#9733; = Premium/Collectible</p>",
+        "<p class=\"star-legend\">"
+        "<span class=\"legend-item\">&#9733; = Premium/Collectible</span>"
+        "<span class=\"legend-item\">🔗 = Tankopedia link</span>"
+        "<span class=\"legend-item\">📜 = Description available</span>"
+        "</p>",
         "<div class=\"view-controls\">",
         "<div class=\"view-row top\">",
         "<span class=\"view-label\">View</span>",
@@ -1398,8 +1449,8 @@ def _render_html(
                     "<col class=\"col-player\" />"
                     "<col class=\"col-tankopedia\" />"
                     "</colgroup>",
-                    "<thead><tr><th>Tank</th><th class=\"score-head\">Damage</th><th>Player</th><th class=\"tankopedia-head\">🔗</th></tr></thead>",
-                    f"<tbody>{_render_rows(rows, tankopedia_href=tankopedia_href, tankopedia_names_norm=tankopedia_names_norm, tank_badges_by_norm=tank_badges_by_norm)}</tbody>",
+                    "<thead><tr><th>Tank</th><th class=\"score-head\">Damage</th><th>Player</th><th class=\"tankopedia-head\">Info</th></tr></thead>",
+                    f"<tbody>{_render_rows(rows, tankopedia_href=tankopedia_href, tankopedia_names_norm=tankopedia_names_norm, tank_badges_by_norm=tank_badges_by_norm, tank_has_description_by_norm=tank_has_description_by_norm)}</tbody>",
                     "</table>",
                     "</div>",
                     "</details>",
@@ -1450,11 +1501,12 @@ async def generate_leaderboard_page() -> str | None:
     tankopedia_badges = await db.list_tankopedia_tank_badges()
     tankopedia_names_norm = {
         utils.norm_tank_name(name)
-        for name, _is_premium, _is_collectible in tankopedia_badges
+        for name, _is_premium, _is_collectible, _has_description in tankopedia_badges
         if str(name or "").strip()
     }
     tank_badges_by_norm: dict[str, tuple[bool, bool]] = {}
-    for name, is_premium, is_collectible in tankopedia_badges:
+    tank_has_description_by_norm: dict[str, bool] = {}
+    for name, is_premium, is_collectible, has_description in tankopedia_badges:
         norm = utils.norm_tank_name(name)
         if not norm:
             continue
@@ -1462,6 +1514,9 @@ async def generate_leaderboard_page() -> str | None:
         tank_badges_by_norm[norm] = (
             prev_collectible or bool(int(is_collectible)),
             prev_premium or bool(int(is_premium)),
+        )
+        tank_has_description_by_norm[norm] = bool(
+            tank_has_description_by_norm.get(norm, False) or bool(has_description)
         )
     tankopedia_href = _tankopedia_relative_href()
     top_per_tier_rows = await db.stats_top_per_tier(limit_per_tier=3)
@@ -1554,6 +1609,7 @@ async def generate_leaderboard_page() -> str | None:
         tankopedia_href=tankopedia_href,
         tankopedia_names_norm=tankopedia_names_norm,
         tank_badges_by_norm=tank_badges_by_norm,
+        tank_has_description_by_norm=tank_has_description_by_norm,
     )
     output_path = Path(config.WEB_OUTPUT_PATH)
     output_path.parent.mkdir(parents=True, exist_ok=True)
