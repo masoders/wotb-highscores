@@ -158,6 +158,11 @@ h1 {
   font-size: 1.45rem;
   color: var(--leaderboard-color);
 }
+.star-legend {
+  margin: -6px 0 12px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
 .view-controls {
   display: flex;
   flex-direction: column;
@@ -201,6 +206,21 @@ h1 {
 .view-toggle button.active {
   background: linear-gradient(180deg, #367dcb, #2b5baf);
   color: #f3f8ff;
+}
+.tankopedia-nav-link {
+  margin-left: auto;
+  border: 1px solid #3a527b;
+  border-radius: 999px;
+  background: #12213d;
+  color: #d0defe;
+  text-decoration: none;
+  padding: 7px 12px;
+  font-size: 0.86rem;
+  line-height: 1.2;
+}
+.tankopedia-nav-link:hover {
+  background: #1e3357;
+  color: #eef5ff;
 }
 .bulk-actions {
   display: inline-flex;
@@ -393,7 +413,8 @@ th {
 .col-type { width: 14%; }
 .col-tier { width: 10%; }
 .col-score { width: 16%; }
-.col-player { width: 38%; }
+.col-player { width: 30%; }
+.col-tankopedia { width: 10%; }
 .col-p-tank { width: 40%; }
 .col-p-type { width: 18%; }
 .col-p-tier { width: 10%; }
@@ -426,7 +447,38 @@ tbody tr:hover { background: #253a5a66; }
 .tank-link:hover {
   text-decoration: underline;
 }
+.tank-stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+}
+.tank-star {
+  display: inline-block;
+  font-size: 0.84em;
+  line-height: 1;
+  color: var(--muted);
+}
 .player-name { color: var(--player-name-color); }
+.tankopedia-head,
+.tankopedia-col {
+  text-align: center;
+}
+.tankopedia-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #cfe1ff;
+  text-decoration: none;
+  border: 1px solid #4d6796;
+  border-radius: 7px;
+  width: 24px;
+  height: 24px;
+  line-height: 1;
+}
+.tankopedia-icon:hover {
+  background: #253a5a;
+}
 .player-link {
   color: inherit;
   text-decoration: none;
@@ -483,8 +535,9 @@ tbody tr:hover { background: #253a5a66; }
   .filter-tools { width: 100%; }
   .filter-tools input, .filter-tools select { width: 100%; }
   .col-tank { width: 58%; }
-  .col-score { width: 22%; }
-  .col-player { width: 42%; }
+  .col-score { width: 20%; }
+  .col-player { width: 32%; }
+  .col-tankopedia { width: 12%; }
   .col-p-tank { width: 52%; }
   .col-p-type { width: 20%; }
   .col-p-tier { width: 10%; }
@@ -554,16 +607,60 @@ def _render_tank_link(
     *,
     tankopedia_href: str | None,
     tankopedia_names_norm: set[str],
+    tank_badges_by_norm: dict[str, tuple[bool, bool]],
 ) -> str:
+    badges = _render_tank_badges(tank_name, tank_badges_by_norm=tank_badges_by_norm)
     safe_name = _safe_web_text(tank_name, fallback="Unknown")
     if not tankopedia_href:
-        return safe_name
+        return f"{safe_name}{badges}"
     norm = utils.norm_tank_name(str(tank_name or ""))
     if not norm or norm not in tankopedia_names_norm:
-        return safe_name
+        return f"{safe_name}{badges}"
     href = f"{tankopedia_href}?q={quote(str(tank_name or ''), safe='')}"
     safe_href = _safe_web_text(href, quote=True)
-    return f"<a class=\"tank-link\" href=\"{safe_href}\">{safe_name}</a>"
+    return f"<a class=\"tank-link\" href=\"{safe_href}\">{safe_name}</a>{badges}"
+
+
+def _render_tank_badges(
+    tank_name: str,
+    *,
+    tank_badges_by_norm: dict[str, tuple[bool, bool]],
+) -> str:
+    norm = utils.norm_tank_name(str(tank_name or ""))
+    if not norm:
+        return ""
+    is_collectible, is_premium = tank_badges_by_norm.get(norm, (False, False))
+    if not (is_collectible or is_premium):
+        return ""
+    return (
+        "<span class=\"tank-stars\">"
+        "<span class=\"tank-star\" title=\"Premium/Collectible tank\" "
+        "aria-label=\"Premium or collectible tank\">&#9733;</span>"
+        "</span>"
+    )
+
+
+def _render_tankopedia_icon_link(
+    tank_name: str,
+    *,
+    tankopedia_href: str | None,
+    tankopedia_names_norm: set[str],
+) -> str:
+    if not tankopedia_href:
+        return ""
+    norm = utils.norm_tank_name(str(tank_name or ""))
+    if not norm or norm not in tankopedia_names_norm:
+        return ""
+    href = f"{tankopedia_href}?q={quote(str(tank_name or ''), safe='')}"
+    safe_href = _safe_web_text(href, quote=True)
+    safe_name = _safe_web_text(tank_name, fallback="tank")
+    return (
+        f"<a class=\"tankopedia-icon\" href=\"{safe_href}\" "
+        f"title=\"Open {safe_name} in Tankopedia\" "
+        f"aria-label=\"Open {safe_name} in Tankopedia\">"
+        "🔗"
+        "</a>"
+    )
 
 
 def _render_rows(
@@ -571,6 +668,7 @@ def _render_rows(
     *,
     tankopedia_href: str | None,
     tankopedia_names_norm: set[str],
+    tank_badges_by_norm: dict[str, tuple[bool, bool]],
 ) -> str:
     out: list[str] = []
     latest_idx = -1
@@ -590,10 +688,9 @@ def _render_rows(
 
     for i, row in enumerate(rows):
         tank_raw = str(row.get("tank_name") or "")
-        tank = _render_tank_link(
-            tank_raw,
-            tankopedia_href=tankopedia_href,
-            tankopedia_names_norm=tankopedia_names_norm,
+        tank = (
+            f"{_safe_web_text(tank_raw, fallback='Unknown')}"
+            f"{_render_tank_badges(tank_raw, tank_badges_by_norm=tank_badges_by_norm)}"
         )
         score = row.get("score")
         score_val = int(score) if isinstance(score, int) else None
@@ -601,6 +698,11 @@ def _render_rows(
         if score_val is None or score_val <= 0:
             player_raw = "-"
         player = _render_player_link(player_raw)
+        tankopedia_icon = _render_tankopedia_icon_link(
+            tank_raw,
+            tankopedia_href=tankopedia_href,
+            tankopedia_names_norm=tankopedia_names_norm,
+        )
         score_text = _safe_web_text(_format_score(score_val), fallback="-")
         tier = _safe_web_text(row.get("tier"))
         ttype = _safe_web_text(utils.title_case_type(str(row.get("type") or "")))
@@ -616,9 +718,10 @@ def _render_rows(
             f"<td class=\"tank-name\" data-label=\"Tank\">{tank}</td>"
             f"<td class=\"score\" data-label=\"Damage\">{score_text}</td>"
             f"<td class=\"player-name\" data-label=\"Player\">{player}</td>"
+            f"<td class=\"tankopedia-col\" data-label=\"Tankopedia\">{tankopedia_icon}</td>"
             "</tr>"
             "<tr class=\"row-detail\">"
-            f"<td colspan=\"3\">Tier {tier} • {ttype}</td>"
+            f"<td colspan=\"4\">Tier {tier} • {ttype}</td>"
             "</tr>"
         )
     return "".join(out)
@@ -641,6 +744,7 @@ def _render_player_rows(
     *,
     tankopedia_href: str | None,
     tankopedia_names_norm: set[str],
+    tank_badges_by_norm: dict[str, tuple[bool, bool]],
 ) -> str:
     out: list[str] = []
     sorted_rows = sorted(
@@ -671,6 +775,7 @@ def _render_player_rows(
             tank_raw,
             tankopedia_href=tankopedia_href,
             tankopedia_names_norm=tankopedia_names_norm,
+            tank_badges_by_norm=tank_badges_by_norm,
         )
         ttype = _safe_web_text(utils.title_case_type(str(row.get("type") or "")))
         tier = _safe_web_text(row.get("tier"))
@@ -701,6 +806,7 @@ def _render_player_blocks(
     *,
     tankopedia_href: str | None,
     tankopedia_names_norm: set[str],
+    tank_badges_by_norm: dict[str, tuple[bool, bool]],
 ) -> str:
     grouped = _group_rows_by_player(rows)
     out: list[str] = []
@@ -725,7 +831,7 @@ def _render_player_blocks(
                 "<col class=\"col-p-score\" />"
                 "</colgroup>",
                 "<thead><tr><th>Tank</th><th>Type</th><th>Tier</th><th class=\"score-head\">Damage</th></tr></thead>",
-                f"<tbody>{_render_player_rows(player_rows, tankopedia_href=tankopedia_href, tankopedia_names_norm=tankopedia_names_norm)}</tbody>",
+                f"<tbody>{_render_player_rows(player_rows, tankopedia_href=tankopedia_href, tankopedia_names_norm=tankopedia_names_norm, tank_badges_by_norm=tank_badges_by_norm)}</tbody>",
                 "</table>",
                 "</div>",
                 "</details>",
@@ -739,6 +845,7 @@ def _render_stats_top_per_tier(
     *,
     tankopedia_href: str | None,
     tankopedia_names_norm: set[str],
+    tank_badges_by_norm: dict[str, tuple[bool, bool]],
 ) -> str:
     grouped: dict[int, list[tuple[int, int, str, str, int]]] = defaultdict(list)
     for tier, rank, tank_name, player_name, score in rows:
@@ -764,6 +871,7 @@ def _render_stats_top_per_tier(
                 tank_name,
                 tankopedia_href=tankopedia_href,
                 tankopedia_names_norm=tankopedia_names_norm,
+                tank_badges_by_norm=tank_badges_by_norm,
             )
             out.append(
                 "<tr>"
@@ -784,6 +892,7 @@ def _render_stats_tanks(
     *,
     tankopedia_href: str | None,
     tankopedia_names_norm: set[str],
+    tank_badges_by_norm: dict[str, tuple[bool, bool]],
 ) -> str:
     out: list[str] = [
         "<table class=\"stats-table\">",
@@ -795,6 +904,7 @@ def _render_stats_tanks(
             tank_name,
             tankopedia_href=tankopedia_href,
             tankopedia_names_norm=tankopedia_names_norm,
+            tank_badges_by_norm=tank_badges_by_norm,
         )
         out.append(
             "<tr>"
@@ -1127,9 +1237,11 @@ def _render_html(
     data_blob: str,
     tankopedia_href: str | None,
     tankopedia_names_norm: set[str],
+    tank_badges_by_norm: dict[str, tuple[bool, bool]],
 ) -> str:
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     banner = ""
+    tankopedia_nav_link = ""
     safe_align = clan_name_align if clan_name_align in {"left", "center"} else "center"
     hero_class = "hero"
     if banner_url:
@@ -1140,6 +1252,12 @@ def _render_html(
         )
     else:
         hero_class = "hero no-banner"
+    if tankopedia_href:
+        safe_tankopedia_href = _safe_web_text(tankopedia_href, quote=True)
+        tankopedia_nav_link = (
+            f"<a class=\"tankopedia-nav-link\" href=\"{safe_tankopedia_href}\" "
+            "aria-label=\"Open Tankopedia\">Tankopedia</a>"
+        )
     content = [
         "<!doctype html>",
         "<html lang=\"en\">",
@@ -1163,6 +1281,7 @@ def _render_html(
         "</div>",
         "</section>",
         "<h2 class=\"section-title\">Leaderboard</h2>",
+        "<p class=\"star-legend\">&#9733; = Premium/Collectible</p>",
         "<div class=\"view-controls\">",
         "<div class=\"view-row top\">",
         "<span class=\"view-label\">View</span>",
@@ -1171,6 +1290,7 @@ def _render_html(
         "<button type=\"button\" data-view-btn=\"tank\" aria-pressed=\"false\">By Tank</button>",
         "<button type=\"button\" data-view-btn=\"player\" aria-pressed=\"false\">By Player</button>",
         "</div>",
+        tankopedia_nav_link,
         "</div>",
         "<div class=\"view-row bottom\">",
         "<div class=\"bulk-actions\" role=\"group\" aria-label=\"Expand and collapse\">",
@@ -1215,6 +1335,7 @@ def _render_html(
                 top_tanks_rows,
                 tankopedia_href=tankopedia_href,
                 tankopedia_names_norm=tankopedia_names_norm,
+                tank_badges_by_norm=tank_badges_by_norm,
             ),
             "</div>",
             "<div class=\"stats-card\">",
@@ -1236,6 +1357,7 @@ def _render_html(
                 top_per_tier_rows,
                 tankopedia_href=tankopedia_href,
                 tankopedia_names_norm=tankopedia_names_norm,
+                tank_badges_by_norm=tank_badges_by_norm,
             ),
             "</div>",
             "</div>",
@@ -1274,9 +1396,10 @@ def _render_html(
                     "<col class=\"col-tank\" />"
                     "<col class=\"col-score\" />"
                     "<col class=\"col-player\" />"
+                    "<col class=\"col-tankopedia\" />"
                     "</colgroup>",
-                    "<thead><tr><th>Tank</th><th class=\"score-head\">Damage</th><th>Player</th></tr></thead>",
-                    f"<tbody>{_render_rows(rows, tankopedia_href=tankopedia_href, tankopedia_names_norm=tankopedia_names_norm)}</tbody>",
+                    "<thead><tr><th>Tank</th><th class=\"score-head\">Damage</th><th>Player</th><th class=\"tankopedia-head\">🔗</th></tr></thead>",
+                    f"<tbody>{_render_rows(rows, tankopedia_href=tankopedia_href, tankopedia_names_norm=tankopedia_names_norm, tank_badges_by_norm=tank_badges_by_norm)}</tbody>",
                     "</table>",
                     "</div>",
                     "</details>",
@@ -1295,6 +1418,7 @@ def _render_html(
                 player_rows,
                 tankopedia_href=tankopedia_href,
                 tankopedia_names_norm=tankopedia_names_norm,
+                tank_badges_by_norm=tank_badges_by_norm,
             ),
             "</div>",
             "</div>",
@@ -1323,12 +1447,22 @@ async def generate_leaderboard_page() -> str | None:
         return None
 
     tanks = await db.list_tanks()
-    tankopedia_names = await db.list_tankopedia_tank_names()
+    tankopedia_badges = await db.list_tankopedia_tank_badges()
     tankopedia_names_norm = {
         utils.norm_tank_name(name)
-        for name in tankopedia_names
+        for name, _is_premium, _is_collectible in tankopedia_badges
         if str(name or "").strip()
     }
+    tank_badges_by_norm: dict[str, tuple[bool, bool]] = {}
+    for name, is_premium, is_collectible in tankopedia_badges:
+        norm = utils.norm_tank_name(name)
+        if not norm:
+            continue
+        prev_collectible, prev_premium = tank_badges_by_norm.get(norm, (False, False))
+        tank_badges_by_norm[norm] = (
+            prev_collectible or bool(int(is_collectible)),
+            prev_premium or bool(int(is_premium)),
+        )
     tankopedia_href = _tankopedia_relative_href()
     top_per_tier_rows = await db.stats_top_per_tier(limit_per_tier=3)
     top_tanks_rows = await db.stats_most_recorded_tanks(limit=10)
@@ -1419,6 +1553,7 @@ async def generate_leaderboard_page() -> str | None:
         data_blob=_json_for_html(data_payload),
         tankopedia_href=tankopedia_href,
         tankopedia_names_norm=tankopedia_names_norm,
+        tank_badges_by_norm=tank_badges_by_norm,
     )
     output_path = Path(config.WEB_OUTPUT_PATH)
     output_path.parent.mkdir(parents=True, exist_ok=True)

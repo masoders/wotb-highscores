@@ -59,6 +59,7 @@ def _index_html(*, page_name: str, updated_text: str) -> str:
     </section>
 
     <h2 class="section-title">Tankopedia</h2>
+    <p class="star-legend">&#9733; = Premium/Collectible</p>
     <div class="view-controls">
       <div class="view-row top">
         <div class="filter-tools">
@@ -194,6 +195,11 @@ h1 {
 .section-title {
   margin: 34px 0 16px;
   font-size: 1.45rem;
+}
+.star-legend {
+  margin: -6px 0 12px;
+  color: var(--muted);
+  font-size: 0.84rem;
 }
 .view-controls {
   display: flex;
@@ -371,6 +377,18 @@ tbody tr:hover { background: #253a5a66; }
 }
 .data-row.expanded + .row-detail { display: table-row; }
 .tank-name { color: #ecf1ff; font-weight: 700; }
+.tank-stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+}
+.tank-star {
+  display: inline-block;
+  font-size: 0.84em;
+  line-height: 1;
+  color: var(--muted);
+}
 .badge {
   display: inline-block;
   padding: 3px 8px;
@@ -516,6 +534,8 @@ function titleCaseWords(value) {
     .map((part) => part ? `${part[0].toUpperCase()}${part.slice(1).toLowerCase()}` : "")
     .join(" ");
 }
+
+const TYPE_FILTER_ORDER = ["Light", "Medium", "Heavy", "Tank Destroyer"];
 
 function applyFilters() {
   const tier = tierFilter.value;
@@ -683,6 +703,11 @@ function renderTankDetailsBox(details) {
   return renderCharacteristicBox("Tank Details", rows);
 }
 
+function tankStarsHtml(tank) {
+  if (!Number(tank.is_collectible) && !Number(tank.is_premium)) return "";
+  return "<span class=\\"tank-stars\\"><span class=\\"tank-star\\" title=\\"Premium/Collectible tank\\" aria-label=\\"Premium or collectible tank\\">&#9733;</span></span>";
+}
+
 function groupByTierAndType(rows) {
   const grouped = new Map();
   for (const tank of rows) {
@@ -701,21 +726,20 @@ function renderTankRow(tank) {
   const rowId = String(tank.tank_id ?? "");
   const expanded = state.expandedIds.has(rowId);
   const groupedCharacteristics = groupedCharacteristicRows(details);
+  const stars = tankStarsHtml(tank);
   const boxHtml = [renderTankDetailsBox(details), ...CHAR_HEADINGS.map((heading) => (
     renderCharacteristicBox(heading, groupedCharacteristics[heading] || [])
   ))].join("");
 
   return `
     <tr class="data-row ${expanded ? "expanded" : ""}" data-row-id="${esc(rowId)}" tabindex="0" aria-expanded="${expanded ? "true" : "false"}">
-      <td class="tank-name">${esc(tank.name || "Unknown")}</td>
+      <td class="tank-name">${esc(tank.name || "Unknown")}${stars}</td>
       <td>${esc(titleCaseType(tank.type))}</td>
       <td>${esc(tank.tier ?? "-")}</td>
       <td>${esc(titleCaseWords(tank.nation))}</td>
-      <td>${Number(tank.is_premium) ? "Yes" : "No"}</td>
-      <td>${Number(tank.is_collectible) ? "Yes" : "No"}</td>
     </tr>
     <tr class="row-detail">
-      <td colspan="6">
+      <td colspan="4">
         <section class="detail-card">
           <h4 class="detail-title">Vehicle Characteristics</h4>
           <div class="char-grid">${boxHtml}</div>
@@ -755,8 +779,6 @@ function render() {
                   <th>Type</th>
                   <th>Tier</th>
                   <th>Nation</th>
-                  <th>Premium</th>
-                  <th>Collectible</th>
                 </tr>
               </thead>
               <tbody>${rowHtml}</tbody>
@@ -780,7 +802,16 @@ function render() {
 function hydrateTypeFilter() {
   const types = Array.from(
     new Set(state.tanks.map((t) => toText(t.type)).filter((v) => v))
-  ).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  ).sort((a, b) => {
+    const aLabel = titleCaseType(a);
+    const bLabel = titleCaseType(b);
+    const aIdx = TYPE_FILTER_ORDER.indexOf(aLabel);
+    const bIdx = TYPE_FILTER_ORDER.indexOf(bLabel);
+    const aRank = aIdx >= 0 ? aIdx : TYPE_FILTER_ORDER.length;
+    const bRank = bIdx >= 0 ? bIdx : TYPE_FILTER_ORDER.length;
+    if (aRank !== bRank) return aRank - bRank;
+    return aLabel.localeCompare(bLabel, undefined, { sensitivity: "base" });
+  });
   for (const type of types) {
     const opt = document.createElement("option");
     opt.value = type;
@@ -804,11 +835,17 @@ function hydrateCountryFilter() {
 expandAllBtn.addEventListener("click", () => {
   state.expandedIds = new Set(state.filtered.map((tank) => String(tank.tank_id ?? "")));
   render();
+  tankList.querySelectorAll("details").forEach((el) => {
+    el.open = true;
+  });
 });
 
 collapseAllBtn.addEventListener("click", () => {
   state.expandedIds.clear();
   render();
+  tankList.querySelectorAll("details").forEach((el) => {
+    el.open = false;
+  });
 });
 
 resetFiltersBtn.addEventListener("click", () => {

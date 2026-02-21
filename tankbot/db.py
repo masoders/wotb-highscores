@@ -1145,6 +1145,32 @@ async def list_tankopedia_tank_names() -> list[str]:
     return [str(r[0]) for r in rows if r and r[0]]
 
 
+async def list_tankopedia_tank_badges() -> list[tuple[str, int, int]]:
+    async with _connect_db() as conn:
+        cur = await conn.execute(
+            """
+            SELECT name, is_premium, is_collectible
+            FROM tankopedia_tanks
+            ORDER BY name COLLATE NOCASE ASC
+            """
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+    out: list[tuple[str, int, int]] = []
+    for row in rows:
+        name = str(row[0] or "").strip()
+        if not name:
+            continue
+        out.append(
+            (
+                name,
+                int(row[1]) if row[1] is not None else 0,
+                int(row[2]) if row[2] is not None else 0,
+            )
+        )
+    return out
+
+
 async def replace_tankopedia_snapshot(
     *,
     tanks: list[dict[str, object]],
